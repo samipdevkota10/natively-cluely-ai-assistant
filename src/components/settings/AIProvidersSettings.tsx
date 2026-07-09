@@ -1422,7 +1422,7 @@ export const AIProvidersSettings: React.FC = () => {
                             key: 'auto',
                             value: 'auto' as const,
                             label: 'Auto (recommended)',
-                            description: 'DeepSeek V4 Pro when a DeepSeek key is configured — top LiveCodeBench score for LeetCode-style problems. Falls back to your default model otherwise.',
+                            description: 'Strongest coding model among your configured keys: DeepSeek V4 Pro, else Claude Sonnet, else GPT-5.4, else Gemini 3.1 Pro. Falls back to your default model if none are configured.',
                         },
                         {
                             key: 'deepseek',

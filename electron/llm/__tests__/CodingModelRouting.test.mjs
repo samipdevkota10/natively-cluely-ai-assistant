@@ -1,10 +1,11 @@
 // electron/llm/__tests__/CodingModelRouting.test.mjs
 //
 // F1 — per-answer-type coding model routing. Proves the pure resolver:
-//  - routes coding/DSA/debugging/system-design answers to DeepSeek V4 Pro
-//    when a DeepSeek key exists (top LiveCodeBench for LeetCode-style problems)
-//  - is a strict no-op (null) with no key, with setting 'off', or for
-//    non-coding answer types
+//  - routes coding/DSA/debugging/system-design answers down the auto chain:
+//    DeepSeek V4 Pro (top LiveCodeBench) → Claude Sonnet → GPT-5.4 → Gemini
+//    3.1 Pro, first provider with a configured key wins
+//  - is a strict no-op (null) with NO keys at all, with setting 'off', or
+//    for non-coding answer types
 //  - lets an explicit user setting win over auto
 //  - flags text-only providers so callers can run extract-then-solve for
 //    screenshot-bearing requests instead of sending images to DeepSeek
@@ -51,16 +52,40 @@ describe('resolveCodingModelOverride — auto (default)', () => {
       assert.equal(r.model, 'deepseek-v4-pro');
     }
   });
-  test('no DeepSeek key → null (strict no-op, other keys irrelevant to auto)', () => {
+  test('no keys at all → null (strict no-op)', () => {
     assert.equal(resolveCodingModelOverride({ answerType: 'coding_question_answer', availability: NONE }), null);
-    assert.equal(
-      resolveCodingModelOverride({
-        answerType: 'dsa_question_answer',
-        availability: { hasDeepseek: false, hasClaude: true, hasOpenai: true },
-      }),
-      null,
-      'auto only targets DeepSeek; without its key current behavior is kept'
-    );
+  });
+  test('auto fallback chain: no DeepSeek key → strongest configured provider', () => {
+    // claude beats openai/gemini
+    let r = resolveCodingModelOverride({
+      answerType: 'dsa_question_answer',
+      availability: { hasDeepseek: false, hasClaude: true, hasOpenai: true, hasGemini: true },
+    });
+    assert.ok(r);
+    assert.equal(r.provider, 'claude');
+    assert.equal(r.model, 'claude-sonnet-4-6');
+    assert.equal(r.requiresTextOnlyInput, false, 'Claude accepts images');
+    // openai beats gemini
+    r = resolveCodingModelOverride({
+      answerType: 'coding_question_answer',
+      availability: { hasDeepseek: false, hasClaude: false, hasOpenai: true, hasGemini: true },
+    });
+    assert.ok(r);
+    assert.equal(r.provider, 'openai');
+    assert.equal(r.model, 'gpt-5.4');
+    // gemini last
+    r = resolveCodingModelOverride({
+      answerType: 'coding_question_answer',
+      availability: { hasDeepseek: false, hasClaude: false, hasOpenai: false, hasGemini: true },
+    });
+    assert.ok(r);
+    assert.equal(r.provider, 'gemini');
+    assert.equal(r.model, 'gemini-3.1-pro-preview');
+    assert.equal(r.requiresTextOnlyInput, false, 'Gemini accepts images');
+    // deepseek still wins when present
+    r = resolveCodingModelOverride({ answerType: 'coding_question_answer', availability: ALL });
+    assert.ok(r);
+    assert.equal(r.provider, 'deepseek');
   });
   test('non-coding answer type → null even with all keys', () => {
     assert.equal(resolveCodingModelOverride({ answerType: 'behavioral_question_answer', availability: ALL }), null);

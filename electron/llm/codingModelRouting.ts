@@ -40,6 +40,19 @@ const TEXT_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['deepseek']);
 export const DEFAULT_CODING_PROVIDER = 'deepseek';
 export const DEFAULT_CODING_MODEL = 'deepseek-v4-pro';
 
+/**
+ * Auto-mode fallback chain, strongest coding model first. Without a DeepSeek
+ * key, coding answers still route to the strongest coding model among the
+ * providers whose keys ARE configured (plan order: deepseek → claude → openai
+ * → gemini pro). Model IDs match the ones the app's dispatch/UI already use.
+ */
+export const AUTO_CODING_CHAIN: ReadonlyArray<{ provider: string; model: string }> = [
+  { provider: DEFAULT_CODING_PROVIDER, model: DEFAULT_CODING_MODEL },
+  { provider: 'claude', model: 'claude-sonnet-4-6' },
+  { provider: 'openai', model: 'gpt-5.4' },
+  { provider: 'gemini', model: 'gemini-3.1-pro-preview' },
+];
+
 export interface CodingProviderAvailability {
   hasDeepseek: boolean;
   hasClaude?: boolean;
@@ -106,13 +119,17 @@ export function resolveCodingModelOverride(input: {
     };
   }
 
-  // Auto: strongest LeetCode-style model with an available key.
-  if (availability.hasDeepseek) {
-    return {
-      provider: DEFAULT_CODING_PROVIDER,
-      model: DEFAULT_CODING_MODEL,
-      requiresTextOnlyInput: true,
-    };
+  // Auto: strongest LeetCode-style model with an available key. Walks the
+  // fallback chain so users WITHOUT a DeepSeek key still get their best
+  // configured coding model instead of the general-purpose default.
+  for (const candidate of AUTO_CODING_CHAIN) {
+    if (providerAvailable(candidate.provider, availability)) {
+      return {
+        provider: candidate.provider,
+        model: candidate.model,
+        requiresTextOnlyInput: TEXT_ONLY_PROVIDERS.has(candidate.provider),
+      };
+    }
   }
   return null;
 }
