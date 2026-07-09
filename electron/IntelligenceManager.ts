@@ -55,7 +55,7 @@ export class IntelligenceManager extends EventEmitter {
             // Verified code execution (background): ✓ badge + corrected message.
             'code_verified', 'code_correction',
             'refined_answer', 'refined_answer_token',
-            'recap', 'recap_token', 'clarify', 'clarify_token',
+            'recap', 'recap_token', 'fact_check', 'fact_check_token', 'clarify', 'clarify_token',
             'follow_up_questions_update', 'follow_up_questions_token',
             'manual_answer_started', 'manual_answer_result',
             'mode_changed', 'error',
@@ -164,6 +164,10 @@ export class IntelligenceManager extends EventEmitter {
 
     async runRecap(): Promise<string | null> {
         return this.engine.runRecap();
+    }
+
+    async runFactCheck(): Promise<string | null> {
+        return this.engine.runFactCheck();
     }
 
     async runClarify(): Promise<string | null> {

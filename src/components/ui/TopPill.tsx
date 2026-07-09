@@ -1,4 +1,4 @@
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { ChevronUp, ChevronDown, Zap } from "lucide-react";
 import icon from "../icon.png";
 import type { OverlayAppearance } from "../../lib/overlayAppearance";
 
@@ -8,6 +8,9 @@ interface TopPillProps {
     onQuit: () => void;
     appearance: OverlayAppearance;
     onLogoClick?: () => void;
+    /** Smart Mode (F3): coding-interview bias toggle state. */
+    smartMode?: boolean;
+    onToggleSmartMode?: () => void;
 }
 
 export default function TopPill({
@@ -16,12 +19,53 @@ export default function TopPill({
     onQuit,
     appearance,
     onLogoClick,
+    smartMode,
+    onToggleSmartMode,
 }: TopPillProps) {
+    // Manual window drag. CSS -webkit-app-region drag is unreliable on this
+    // transparent overlay (it toggles setIgnoreMouseEvents for click-through),
+    // so we move the window ourselves via screen-coordinate deltas.
+    const handleDragStart = (e: React.MouseEvent) => {
+        if (e.button !== 0) return; // left button only
+        // Don't start a drag from an interactive control (button/img).
+        if ((e.target as HTMLElement).closest("button")) return;
+        e.preventDefault();
+        let lastX = e.screenX;
+        let lastY = e.screenY;
+        let frame = 0;
+        let pendingDx = 0;
+        let pendingDy = 0;
+        const flush = () => {
+            frame = 0;
+            if (pendingDx || pendingDy) {
+                window.electronAPI?.moveWindowBy?.(pendingDx, pendingDy);
+                pendingDx = 0;
+                pendingDy = 0;
+            }
+        };
+        const onMove = (ev: MouseEvent) => {
+            pendingDx += ev.screenX - lastX;
+            pendingDy += ev.screenY - lastY;
+            lastX = ev.screenX;
+            lastY = ev.screenY;
+            if (!frame) frame = requestAnimationFrame(flush);
+        };
+        const onUp = () => {
+            if (frame) cancelAnimationFrame(frame);
+            flush();
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+    };
+
     return (
         <div className="flex justify-center select-none z-50">
             <div
+                onMouseDown={handleDragStart}
                 className="
-          draggable-area
+          relative z-50
           flex items-center gap-2
           rounded-full
           border
@@ -30,9 +74,9 @@ export default function TopPill({
           px-1.5 py-1.5
           transition-all duration-300 ease-sculpted
         "
-                style={appearance.pillStyle}
+                style={{ ...appearance.pillStyle, cursor: "grab" }}
             >
-                <div className="draggable-area">
+                <div>
                     {/* LOGO BUTTON */}
                     <button
                         onClick={onLogoClick}
@@ -84,6 +128,31 @@ export default function TopPill({
                     </span>
                     <span className="tracking-wide opacity-80 group-hover:opacity-100">{expanded ? "Hide" : "Show"}</span>
                 </button>
+
+                {/* SMART MODE (F3) — lightning toggle. Drag guard above already
+                    excludes buttons, so clicking never starts a window drag. */}
+                {onToggleSmartMode && (
+                    <button
+                        onClick={onToggleSmartMode}
+                        title={smartMode ? "Smart Mode on — coding-interview bias active" : "Smart Mode off"}
+                        className={`
+              w-7 h-7
+              rounded-full
+              overlay-icon-surface
+              flex items-center justify-center
+              interaction-base interaction-press
+              ${smartMode
+                                ? "text-amber-400 hover:text-amber-300"
+                                : "overlay-text-primary opacity-50 hover:opacity-90"}
+            `}
+                        style={appearance.iconStyle}
+                    >
+                        <Zap
+                            className="w-3.5 h-3.5"
+                            fill={smartMode ? "currentColor" : "none"}
+                        />
+                    </button>
+                )}
 
                 {/* STOP / QUIT BUTTON */}
                 <button

@@ -11,7 +11,29 @@ export interface ActionTrigger {
     };
 }
 
+// Fact Check (F5, Cluely parity). Shared across GENERAL / SALES / TEAM packs:
+// fires when someone disputes a claim or states a confident checkable fact
+// (statistics, "studies show", "the docs say"). The instruction mandates
+// uncertainty language — no live internet, so never assert false confidence.
+const FACT_CHECK_TRIGGER: ActionTrigger = {
+    type: 'fact_check',
+    patterns: [
+        /\b(is that (?:actually |really |even )?(?:true|right|correct|accurate))\b/i,
+        /\b(fact[- ]?check|double[- ]?check that|verify that (?:claim|number|stat))\b/i,
+        /\b(that (?:doesn'?t|does not) (?:sound|seem) (?:right|correct|accurate|true))\b/i,
+        /\b(are you sure (?:that|about|it))\b/i,
+        /\b(pretty sure (?:that|it|the)|I read (?:somewhere )?that|studies show|according to (?:a|the) (?:study|report|docs|documentation)|the docs say|statistics (?:show|say))\b/i,
+        /\b(where did you get that (?:number|figure|stat))\b/i,
+    ],
+    priority: 0.83,
+    label: 'Fact check claim',
+    promptInstruction:
+        'Fact-check the MOST RECENT verifiable factual claim in the conversation. Output: the claim (quoted), a verdict — Accurate, Inaccurate, or Unverifiable — and one line of correction or context. You have no live internet access: when not certain, use uncertainty language ("likely", "as far as I know") or mark it Unverifiable. Never invent sources or statistics. Under 120 words.',
+    answerStyle: { maxWords: 120, format: 'bullets', tone: 'neutral' },
+};
+
 const GENERAL_TRIGGERS: ActionTrigger[] = [
+    FACT_CHECK_TRIGGER,
     {
         type: 'general_assistance_request',
         patterns: [
@@ -75,6 +97,7 @@ const NEGOTIATION_TRIGGERS: ActionTrigger[] = [
 
 // Sales triggers
 const SALES_TRIGGERS: ActionTrigger[] = [
+    FACT_CHECK_TRIGGER,
     {
         type: 'pricing_objection',
         patterns: [/\b(expensive|too much|budget|price|cost|afford)\b/i],
@@ -155,6 +178,7 @@ const RECRUITING_TRIGGERS: ActionTrigger[] = [
 
 // Team Meeting triggers
 const TEAM_TRIGGERS: ActionTrigger[] = [
+    FACT_CHECK_TRIGGER,
     {
         type: 'action_item',
         patterns: [
@@ -294,6 +318,84 @@ const TECHNICAL_TRIGGERS: ActionTrigger[] = [
         promptInstruction:
             'You are in Technical Interview mode. Structure the system design answer around requirements, APIs, data model, scaling, and tradeoffs.',
         answerStyle: { maxWords: 260, format: 'bullets', tone: 'analytical' },
+    },
+    // ── Coding-interview follow-up pack (F9) ────────────────────────────────
+    // The moments right AFTER the initial solution — where interviewers probe
+    // optimization, edge cases, walkthroughs, and testing — are where live help
+    // matters most. Patterns target interviewer phrasing, not the candidate's.
+    {
+        type: 'optimization_followup',
+        patterns: [
+            /\b(can (?:you|we) (?:do|make|get) (?:it|this|that) (?:any )?(?:faster|better|more efficient))\b/i,
+            /\b(do (?:it|this|that) in|solve (?:it|this|that) in|get (?:it|this) down to)\s+O\s*\(/i,
+            /\b(without (?:the )?(?:extra|additional) (?:space|memory|array|hash\s?map|hashmap))\b/i,
+            /\b(in (?:constant|linear|logarithmic|log) (?:time|space))\b/i,
+            /\b(is there a (?:faster|better|more (?:efficient|optimal)) (?:way|approach|solution))\b/i,
+            /\b(reduce the (?:time|space) complexity)\b/i,
+        ],
+        priority: 0.94,
+        label: 'Optimize solution',
+        promptInstruction:
+            'You are in Technical Interview mode. The interviewer is asking for a MORE OPTIMAL solution than the current one. State the improved approach and the key insight enabling it, give the new time/space complexity vs the old, and show only the code that changes.',
+        answerStyle: { maxWords: 220, format: 'code', tone: 'analytical' },
+    },
+    {
+        type: 'edge_case_probe',
+        patterns: [
+            /\b(edge cases?|corner cases?|boundary (?:conditions?|cases?))\b/i,
+            /\bwhat (?:happens|about) (?:if|when) (?:the (?:input|array|list|string|tree) is )?(?:empty|null|nil|none|negative|zero|duplicates?|very large)\b/i,
+            /\b(does (?:it|this|that) (?:handle|work (?:for|with)))\b.{0,40}\b(empty|null|duplicates?|negative|overflow|single element)\b/i,
+            /\b(what if there (?:are|is) no)\b/i,
+        ],
+        priority: 0.9,
+        label: 'Cover edge cases',
+        promptInstruction:
+            'You are in Technical Interview mode. The interviewer is probing edge cases. List the edge cases that matter for THIS problem (empty/null input, single element, duplicates, extremes/overflow, invalid input as applicable), state how the current solution behaves on each, and give the minimal fix for any it fails.',
+        answerStyle: { maxWords: 160, format: 'bullets', tone: 'analytical' },
+    },
+    {
+        type: 'code_walkthrough',
+        patterns: [
+            /\b(walk (?:me|us) through (?:your|the|this) (?:code|solution|approach|logic))\b/i,
+            /\b(explain (?:your|the|this) (?:code|solution|approach) (?:to me|line by line|step by step))\b/i,
+            /\b(talk (?:me|us) through (?:it|your (?:code|solution|thinking)))\b/i,
+            /\b(why did you (?:choose|use|pick|go with))\b/i,
+            /\b(what does (?:this|that|the) (?:line|loop|function|variable|part) do)\b/i,
+        ],
+        priority: 0.91,
+        label: 'Walk through code',
+        promptInstruction:
+            'You are in Technical Interview mode. The interviewer wants a walkthrough of the existing solution. Narrate it in speakable first person: the high-level strategy in one sentence, then each logical step and WHY it is there, using a small concrete input as the running example. No new code.',
+        answerStyle: { maxWords: 200, format: 'short_script', tone: 'confident' },
+    },
+    {
+        type: 'testing_probe',
+        patterns: [
+            /\b(how would you test (?:this|that|it|your (?:code|solution|function)))\b/i,
+            /\b(write (?:some|a few|the) (?:unit )?tests?)\b/i,
+            /\b(what test cases?)\b/i,
+            /\b(how do you know (?:it|this|that) (?:works|is correct))\b/i,
+        ],
+        priority: 0.86,
+        label: 'Propose test cases',
+        promptInstruction:
+            'You are in Technical Interview mode. The interviewer is asking about testing. Propose a compact test plan for THIS solution: happy path, boundary cases, and failure/invalid input, each with concrete input → expected output. Mention property-based or stress testing only if genuinely relevant.',
+        answerStyle: { maxWords: 160, format: 'bullets', tone: 'analytical' },
+    },
+    {
+        type: 'behavioral_pivot',
+        patterns: [
+            /\b(tell (?:me|us) about a time)\b/i,
+            /\b(describe a (?:time|situation|project) (?:when|where))\b/i,
+            /\b(have you ever (?:had|worked|dealt|faced|led))\b/i,
+            /\b(what(?:'s| is) the (?:hardest|most challenging) (?:bug|problem|project) you)\b/i,
+            /\b(how do you handle (?:conflict|disagreement|feedback|pressure|deadlines))\b/i,
+        ],
+        priority: 0.87,
+        label: 'Answer behavioral question',
+        promptInstruction:
+            'You are in Technical Interview mode but the interviewer just pivoted to a BEHAVIORAL question. Answer in first person using the STAR shape (situation, task, action, result) grounded in the candidate profile if available — never invent employers, projects, or metrics. Keep it speakable and specific.',
+        answerStyle: { maxWords: 180, format: 'short_script', tone: 'authentic' },
     },
 ];
 

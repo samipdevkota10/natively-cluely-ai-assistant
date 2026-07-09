@@ -7,7 +7,7 @@ import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
 import {
     AnswerLLM, AssistLLM, BrainstormLLM, ClarifyLLM, CodeHintLLM, FollowUpLLM, RecapLLM,
-    FollowUpQuestionsLLM, WhatToAnswerLLM,
+    FactCheckLLM, FollowUpQuestionsLLM, WhatToAnswerLLM,
     prepareTranscriptForWhatToAnswer, buildTemporalContext,
     AssistantResponse as LLMAssistantResponse, classifyIntent, planNextAssistantAction, PlannerDecision,
     extractLatestQuestion, toCandidateFraming, planAnswer, validateAnswerStructure, isCodingAnswerType, resolveFollowUp, resolveFollowUpOrClarify,
@@ -18,6 +18,7 @@ import {
     raceStreamWithDeadline, firstUsefulDeadlineMs, LIVE_INTER_TOKEN_STALL_MS, LIVE_TOTAL_HARD_TIMEOUT_MS
 } from './llm';
 import type { ActiveModeInfo } from './llm/modeProfiles';
+import { resolveCodingModelOverride, CodingModelOverride } from './llm/codingModelRouting';
 import { buildGracefulRetry } from './llm/manualProfileIntelligence';
 import { CodingStreamGate } from './llm/codingStreamGate';
 import { isCodeVerificationEnabled } from './llm/codeVerification/verificationEnabled';
@@ -32,7 +33,7 @@ import { normalizeOutputShape } from './intelligence/OutputShapeNormalizer';
 import { LiveTranscriptBrain } from './intelligence/LiveTranscriptBrain';
 
 // Mode types
-export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'clarify' | 'manual' | 'follow_up_questions' | 'code_hint' | 'brainstorm';
+export type IntelligenceMode = 'idle' | 'assist' | 'what_to_say' | 'follow_up' | 'recap' | 'fact_check' | 'clarify' | 'manual' | 'follow_up_questions' | 'code_hint' | 'brainstorm';
 
 /**
  * Bound an optional-enrichment promise by a wall-clock budget. If the work
@@ -101,6 +102,8 @@ export interface IntelligenceModeEvents {
     'refined_answer_token': (token: string, intent: string) => void;
     'recap': (summary: string) => void;
     'recap_token': (token: string) => void;
+    'fact_check': (result: string) => void;
+    'fact_check_token': (token: string) => void;
     'clarify': (clarification: string) => void;
     'clarify_token': (token: string) => void;
     'follow_up_questions_update': (questions: string) => void;
@@ -139,6 +142,7 @@ export class IntelligenceEngine extends EventEmitter {
     private clarifyLLM: ClarifyLLM | null = null;
     private followUpLLM: FollowUpLLM | null = null;
     private recapLLM: RecapLLM | null = null;
+    private factCheckLLM: FactCheckLLM | null = null;
     private followUpQuestionsLLM: FollowUpQuestionsLLM | null = null;
     private whatToAnswerLLM: WhatToAnswerLLM | null = null;
     private codeHintLLM: CodeHintLLM | null = null;
@@ -234,6 +238,7 @@ export class IntelligenceEngine extends EventEmitter {
         this.clarifyLLM = new ClarifyLLM(this.llmHelper);
         this.followUpLLM = new FollowUpLLM(this.llmHelper);
         this.recapLLM = new RecapLLM(this.llmHelper);
+        this.factCheckLLM = new FactCheckLLM(this.llmHelper);
         this.followUpQuestionsLLM = new FollowUpQuestionsLLM(this.llmHelper);
         this.whatToAnswerLLM = new WhatToAnswerLLM(this.llmHelper);
         this.codeHintLLM = new CodeHintLLM(this.llmHelper);
@@ -400,6 +405,19 @@ export class IntelligenceEngine extends EventEmitter {
         this.dynamicActionEngine = engine;
     }
 
+    /**
+     * SMART MODE (F3, coding-interview optimization). Read lazily from
+     * SettingsManager so the toggle takes effect immediately without a session
+     * restart. Defensive: settings unavailable (tests / early boot) → false,
+     * which keeps every path byte-for-byte legacy.
+     */
+    private isSmartModeEnabled(): boolean {
+        try {
+            const { SettingsManager } = require('./services/SettingsManager') as typeof import('./services/SettingsManager');
+            return SettingsManager.getInstance().get('smartModeEnabled') === true;
+        } catch { return false; }
+    }
+
     private detectAndEmitDynamicActions(segment: TranscriptSegment): void {
         if (!this.dynamicActionEngine || !this.currentSessionId
             || !this.currentDynamicActionModeId || !this.currentDynamicActionTemplateType) {
@@ -415,6 +433,20 @@ export class IntelligenceEngine extends EventEmitter {
             modeId: this.currentDynamicActionModeId,
             sessionId: this.currentSessionId,
         });
+
+        // SMART MODE (F3): the technical_interview trigger pack is active
+        // REGARDLESS of the ambient mode. Second detect pass with the tech
+        // pack; the store's per-session type dedupe (120s window) suppresses
+        // any trigger type both packs share, so no duplicate cards render.
+        if (this.currentDynamicActionTemplateType !== 'technical_interview' && this.isSmartModeEnabled()) {
+            newActions.push(...this.dynamicActionEngine.detectActions({
+                transcript: text,
+                speaker: segment.speaker,
+                modeTemplateType: 'technical_interview',
+                modeId: this.currentDynamicActionModeId,
+                sessionId: this.currentSessionId,
+            }));
+        }
 
         // The store dedupes within the per-session store, so each emitted action
         // is a *new* candidate — safe to forward to renderer for rendering.
@@ -873,6 +905,7 @@ export class IntelligenceEngine extends EventEmitter {
                             source: 'what_to_answer',
                             speakerPerspective: 'interviewer',
                             activeMode: this.getActiveModeInfo(),
+                            smartMode: this.isSmartModeEnabled(),
                         }).answerType;
                         fr = resolveLiveFollowup({
                             turns: memWindowTurns,
@@ -1080,6 +1113,7 @@ export class IntelligenceEngine extends EventEmitter {
                 intentResult,
                 hasCandidateProfile: Boolean(candidateProfile),
                 activeMode: this.getActiveModeInfo(),
+                smartMode: this.isSmartModeEnabled(),
             });
             trace.mark('answer_type_selected', {
                 answerType: answerPlan.answerType,
@@ -1087,6 +1121,41 @@ export class IntelligenceEngine extends EventEmitter {
                 isCoding: isCodingAnswerType(answerPlan.answerType),
                 forbiddenLayers: answerPlan.forbiddenContextLayers.length,
             });
+
+            // ── CODING MODEL ROUTING (coding-interview optimization) ────────────
+            // Route coding/DSA/system-design/debugging answers to the strongest
+            // available coding model for THIS stream only (default: DeepSeek V4
+            // Pro when a key exists — top LiveCodeBench for LeetCode-style
+            // problems). Strictly null-safe: null → legacy routing, no change.
+            // The override never mutates LLMHelper.currentModelId.
+            let codingModelOverride: CodingModelOverride | null = null;
+            try {
+                let codingOverrideSetting: import('./llm/codingModelRouting').CodingModelOverrideSetting;
+                try {
+                    const { SettingsManager } = require('./services/SettingsManager') as typeof import('./services/SettingsManager');
+                    codingOverrideSetting = SettingsManager.getInstance().get('codingModelOverride');
+                } catch { /* settings unavailable (tests / early boot) → auto */ }
+                codingModelOverride = resolveCodingModelOverride({
+                    answerType: answerPlan.answerType,
+                    availability: {
+                        hasDeepseek: this.llmHelper.hasDeepseek?.() ?? false,
+                        hasClaude: this.llmHelper.hasClaude?.() ?? false,
+                        hasOpenai: this.llmHelper.hasOpenai?.() ?? false,
+                        hasGemini: this.llmHelper.hasGemini?.() ?? false,
+                    },
+                    setting: codingOverrideSetting,
+                });
+                if (codingModelOverride) {
+                    trace.mark('coding_model_override', {
+                        provider: codingModelOverride.provider,
+                        model: codingModelOverride.model,
+                        textOnly: codingModelOverride.requiresTextOnlyInput,
+                    });
+                }
+            } catch (overrideErr: any) {
+                // Resolution failure must never block the answer path.
+                console.warn('[IntelligenceEngine] coding model override resolution failed:', overrideErr?.message);
+            }
 
             // Deterministic context route (Phase 6): turn the plan's required/
             // forbidden layers into an explicit, auditable include/exclude route
@@ -1099,13 +1168,91 @@ export class IntelligenceEngine extends EventEmitter {
             trace.mark('context_selected', summarizeContextRoute(contextRoute));
 
             const screenContext = options?.screenContext;
+
+            // ── EXTRACT-THEN-SOLVE (F2, coding-interview optimization) ──────────
+            // The strongest coding model (DeepSeek V4 Pro) is text-only. When the
+            // override targets it AND a screenshot is attached, transcribe the
+            // on-screen problem to text (budget-raced vision call, 3500ms) and
+            // drop the images so the override still engages. Fast path: the
+            // manual ask pipeline pre-runs vision understanding — if that text is
+            // already on screenContext, no second vision call happens at all.
+            // On timeout/failure: keep the images, drop the override (legacy
+            // multimodal path — never a dead end). Extracted text is UNTRUSTED
+            // and rides ONLY the screenContext channel, which PromptAssembler
+            // escapes and tags with untrusted trust level.
+            let effectiveImagePaths = imagePaths;
+            let effectiveScreenContext = screenContext;
+            if (codingModelOverride?.requiresTextOnlyInput && imagePaths && imagePaths.length > 0) {
+                try {
+                    const { runExtractThenSolve } = require('./services/screen/extractThenSolve') as typeof import('./services/screen/extractThenSolve');
+                    let extractEnabled = true;
+                    let screenMode: any = 'vision_first';
+                    let allowScreenshots = true;
+                    try {
+                        const { SettingsManager } = require('./services/SettingsManager') as typeof import('./services/SettingsManager');
+                        const sm = SettingsManager.getInstance();
+                        extractEnabled = sm.get('codingExtractThenSolve') !== false;
+                        screenMode = sm.getScreenUnderstandingMode();
+                        allowScreenshots = (sm.get('providerDataScopes') || {}).screenshots !== false;
+                    } catch { /* settings unavailable (tests / early boot) → defaults */ }
+                    const outcome = await runExtractThenSolve({
+                        requiresTextOnlyInput: true,
+                        imagePaths,
+                        existingScreenText: (screenContext as any)?.extractedText || screenContext?.ocrText,
+                        enabled: extractEnabled,
+                        understand: () => {
+                            const { getScreenUnderstandingService } = require('./services/screen/ScreenUnderstandingService') as typeof import('./services/screen/ScreenUnderstandingService');
+                            return getScreenUnderstandingService().understand({
+                                modeId: 'extract-then-solve',
+                                modeTemplateType: this.getActiveModeInfo()?.templateType,
+                                userAction: 'what_to_say',
+                                qualityMode: 'balanced',
+                                imagePaths,
+                                screenUnderstandingMode: screenMode,
+                                extractionPurpose: 'coding_problem',
+                                providerPolicy: { allowScreenshots },
+                            });
+                        },
+                    });
+                    if (outcome.action === 'solve_text_only') {
+                        effectiveImagePaths = undefined;
+                        if (outcome.screenProblemText) {
+                            effectiveScreenContext = {
+                                ...(screenContext || {}),
+                                extractedText: outcome.screenProblemText,
+                                ocrText: outcome.screenProblemText,
+                                screenType: 'code',
+                                source: 'vision_extract',
+                                providerUsed: outcome.providerUsed,
+                                modelUsed: outcome.modelUsed,
+                                confidence: outcome.confidence,
+                                timestamp: Date.now(),
+                            } as any;
+                        }
+                        trace.mark('screen_extract_then_solve', {
+                            reason: outcome.reason,
+                            extractedChars: outcome.screenProblemText?.length ?? 0,
+                            visionProvider: outcome.providerUsed,
+                        });
+                    } else if (outcome.action === 'keep_images_drop_override') {
+                        codingModelOverride = null;
+                        trace.mark('screen_extract_fallback_multimodal', { reason: outcome.reason, timedOut: outcome.timedOut });
+                    }
+                } catch (extractErr: any) {
+                    // Extraction failure must never block the answer path — fall
+                    // back to the legacy multimodal route without the override.
+                    codingModelOverride = null;
+                    console.warn('[IntelligenceEngine] extract-then-solve failed; keeping multimodal path:', extractErr?.message);
+                }
+            }
+
             console.log('[IntelligenceEngine] Temporal RAG', {
                 previousResponses: temporalContext.previousResponses.length,
                 tone: temporalContext.toneSignals[0]?.type || 'neutral',
                 intent: intentResult.intent,
-                imageCount: imagePaths?.length || 0,
-                screenOcrAvailable: Boolean(screenContext?.ocrText),
-                screenOcrTextLength: screenContext?.ocrText?.length || 0,
+                imageCount: effectiveImagePaths?.length || 0,
+                screenOcrAvailable: Boolean(effectiveScreenContext?.ocrText),
+                screenOcrTextLength: effectiveScreenContext?.ocrText?.length || 0,
             });
 
             const generationId = ++this.currentGenerationId;
@@ -1144,7 +1291,7 @@ export class IntelligenceEngine extends EventEmitter {
             // PI v3 (W5): modeContextPromise is the parallel-prefetched mode-context retrieval
             // (overlaps intent classification + profile grounding). Both args coexist —
             // generateStream's signature is (…activeSkill, domContext, candidateProfile, answerPlan, preFetchedModeContext).
-            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, imagePaths, screenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise);
+            const stream = this.whatToAnswerLLM.generateStream(preparedTranscript, temporalContext, intentResult, effectiveImagePaths, effectiveScreenContext, options?.promptInstruction, options?.activeSkill, options?.domContext, candidateProfile || undefined, answerPlan, modeContextPromise, codingModelOverride ? { provider: codingModelOverride.provider, model: codingModelOverride.model } : undefined);
             let streamAborted = false;
             let emittedStreamingToken = false;
             let streamingTokenBuffer = '';
@@ -1522,7 +1669,7 @@ export class IntelligenceEngine extends EventEmitter {
             // pass → 'code_verified' badge; on a re-verified fix → 'code_correction'
             // new message. Fire-and-forget; failures never affect this return.
             if (isCoding && isCodeVerificationEnabled()) {
-                void this.maybeVerifyCoding(rawAnswerForVerify, question || 'What to Answer', screenContext?.ocrText, trace, generationId);
+                void this.maybeVerifyCoding(rawAnswerForVerify, question || 'What to Answer', effectiveScreenContext?.ocrText, trace, generationId);
             }
 
             trace.mark('ui_render_completed', { chars: fullAnswer.length });
@@ -1769,6 +1916,71 @@ export class IntelligenceEngine extends EventEmitter {
     }
 
     /**
+     * MODE: Fact Check (F5, Cluely parity)
+     * Verifies the most recent checkable factual claim in the conversation.
+     * Same generation-id supersession + streaming shape as runRecap.
+     */
+    async runFactCheck(): Promise<string | null> {
+        console.log('[IntelligenceEngine] runFactCheck called');
+        this.setMode('fact_check');
+
+        try {
+            if (!this.factCheckLLM) {
+                console.error('[IntelligenceEngine] FactCheckLLM not initialized');
+                this.setMode('idle');
+                return null;
+            }
+
+            // Recent window only — the "latest claim" lives in the last few turns.
+            const context = this.session.getFormattedContext(180);
+            if (!context) {
+                console.warn('[IntelligenceEngine] No context available for fact check');
+                this.setMode('idle');
+                return null;
+            }
+
+            const generationId = ++this.currentGenerationId;
+            let fullResult = "";
+            const stream = this.factCheckLLM.generateStream(context);
+            let streamAborted = false;
+
+            for await (const token of stream) {
+                if (this.currentGenerationId !== generationId) {
+                    console.log('[IntelligenceEngine] _fact_check stream aborted by new generation');
+                    await stream.return(undefined);
+                    streamAborted = true;
+                    break;
+                }
+                this.emit('fact_check_token', token);
+                fullResult += token;
+            }
+
+            if (!streamAborted && fullResult && this.currentGenerationId === generationId) {
+                this.emit('fact_check', fullResult);
+
+                // Track as an assistant message so follow-up refinements can target it.
+                this.session.addAssistantMessage(fullResult);
+
+                this.session.pushUsage({
+                    type: 'chat',
+                    timestamp: Date.now(),
+                    question: 'Fact Check',
+                    answer: fullResult
+                });
+            }
+            if (this.currentGenerationId === generationId) {
+                this.setMode('idle');
+            }
+            return fullResult;
+
+        } catch (error) {
+            this.emit('error', error as Error, 'fact_check');
+            this.setMode('idle');
+            return null;
+        }
+    }
+
+    /**
      * MODE: Clarify
      * Ask a clarifying question to the interviewer
      */
@@ -1915,6 +2127,7 @@ export class IntelligenceEngine extends EventEmitter {
                 source: 'manual_input',
                 speakerPerspective: 'user',
                 activeMode: this.getActiveModeInfo(),
+                smartMode: this.isSmartModeEnabled(),
             });
             const context = isCodingAnswerType(answerPlan.answerType)
                 ? undefined

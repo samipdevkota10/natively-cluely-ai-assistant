@@ -13,6 +13,7 @@ import {
   Pencil,
   PointerOff,
   RefreshCw,
+  ShieldCheck,
   SlidersHorizontal,
   X,
   Zap,
@@ -938,27 +939,51 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   // Model Selection State
   const [currentModel, setCurrentModel] = useState<string>('gemini-3-flash-preview');
 
-  // Dynamic Action Button Mode (Recap vs Brainstorm)
-  const [actionButtonMode, setActionButtonMode] = useState<'recap' | 'brainstorm'>('recap');
+  // Dynamic Action Button Mode (Recap vs Brainstorm vs Fact Check)
+  const [actionButtonMode, setActionButtonMode] = useState<'recap' | 'brainstorm' | 'fact_check'>('recap');
 
   useEffect(() => {
     // Load persisted mode
     window.electronAPI
       ?.getActionButtonMode?.()
-      ?.then((mode: 'recap' | 'brainstorm') => {
+      ?.then((mode: 'recap' | 'brainstorm' | 'fact_check') => {
         if (mode) setActionButtonMode(mode);
       })
       .catch(() => {});
 
     // Listen for live changes from SettingsPopup / IPC
     const unsubscribe = window.electronAPI?.onActionButtonModeChanged?.(
-      (mode: 'recap' | 'brainstorm') => {
+      (mode: 'recap' | 'brainstorm' | 'fact_check') => {
         setActionButtonMode(mode);
       },
     );
     return () => {
       unsubscribe?.();
     };
+  }, []);
+
+  // Smart Mode (F3): coding-interview bias toggle (TopPill lightning + Settings mirror)
+  const [smartMode, setSmartMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    window.electronAPI
+      ?.getSmartMode?.()
+      ?.then((enabled: boolean) => setSmartMode(Boolean(enabled)))
+      .catch(() => {});
+    const unsubscribe = window.electronAPI?.onSmartModeChanged?.((enabled: boolean) => {
+      setSmartMode(Boolean(enabled));
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  const handleToggleSmartMode = useCallback(() => {
+    setSmartMode((prev) => {
+      const next = !prev;
+      window.electronAPI?.setSmartMode?.(next)?.catch(() => {});
+      return next;
+    });
   }, []);
 
   const useDarkCodeTheme = !isLightTheme || isGlassTheme || isModernTheme;
@@ -2792,6 +2817,8 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
           for (const it of items) queueToken((it as any).intent, (it as any).token);
         } else if (kind === 'recap') {
           for (const it of items) queueToken('recap', (it as any).token);
+        } else if (kind === 'fact_check') {
+          for (const it of items) queueToken('fact_check', (it as any).token);
         } else if (kind === 'clarify') {
           for (const it of items) queueToken('clarify', (it as any).token);
         } else if (kind === 'follow_up_questions') {
@@ -2872,6 +2899,14 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
         setIsProcessing(false);
         finalizeStreamingByIntent('recap', data.summary);
       }),
+    );
+
+    // STREAMING: Fact Check (F5)
+    cleanups.push(
+      window.electronAPI.onIntelligenceFactCheck?.((data) => {
+        setIsProcessing(false);
+        finalizeStreamingByIntent('fact_check', data.result);
+      }) ?? (() => {}),
     );
 
     // STREAMING: Follow-Up Questions (Rendered as message? Or specific UI?)
@@ -3149,6 +3184,30 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
       ]);
     } finally {
       endOverlayAction('recap');
+      setIsProcessing(false);
+    }
+  };
+
+  const handleFactCheck = async () => {
+    if (!tryBeginOverlayAction('fact_check')) return;
+    setIsExpanded(true);
+    setIsProcessing(true);
+    prepareIntelligenceStreamPlaceholder('fact_check');
+    analytics.trackCommandExecuted('fact_check');
+
+    try {
+      await window.electronAPI.generateFactCheck();
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: genMessageId(),
+          role: 'system',
+          text: `Error: ${err}`,
+        },
+      ]);
+    } finally {
+      endOverlayAction('fact_check');
       setIsProcessing(false);
     }
   };
@@ -4204,6 +4263,7 @@ Provide only the answer, nothing else.`;
     handleFollowUp,
     handleFollowUpQuestions,
     handleRecap,
+    handleFactCheck,
     handleAnswerNow,
     handleClarify,
     handleCodeHint,
@@ -4216,6 +4276,7 @@ Provide only the answer, nothing else.`;
     handleFollowUp,
     handleFollowUpQuestions,
     handleRecap,
+    handleFactCheck,
     handleAnswerNow,
     handleClarify,
     handleCodeHint,
@@ -4320,6 +4381,7 @@ Provide only the answer, nothing else.`;
         handleFollowUp,
         handleFollowUpQuestions,
         handleRecap,
+        handleFactCheck,
         handleAnswerNow,
         handleClarify,
         handleCodeHint,
@@ -4340,6 +4402,8 @@ Provide only the answer, nothing else.`;
         e.preventDefault();
         if (actionButtonMode === 'brainstorm') {
           handleBrainstorm();
+        } else if (actionButtonMode === 'fact_check') {
+          handleFactCheck();
         } else {
           handleRecap();
         }
@@ -4704,6 +4768,7 @@ Provide only the answer, nothing else.`;
       else if (action === 'recap') handlers.handleRecap();
       else if (action === 'dynamicAction4') {
         if (actionButtonMode === 'brainstorm') handlers.handleBrainstorm();
+        else if (actionButtonMode === 'fact_check') handlers.handleFactCheck();
         else handlers.handleRecap();
       } else if (action === 'answer') handlers.handleAnswerNow();
       else if (action === 'clarify') handlers.handleClarify();
@@ -5152,6 +5217,8 @@ Provide only the answer, nothing else.`;
               onQuit={() => (onEndMeeting ? onEndMeeting() : window.electronAPI.quitApp())}
               appearance={appearance}
               onLogoClick={() => window.electronAPI?.setWindowMode?.('launcher')}
+              smartMode={smartMode}
+              onToggleSmartMode={handleToggleSmartMode}
             />
             <motion.div
               ref={shellRef}
@@ -5529,13 +5596,23 @@ Provide only the answer, nothing else.`;
                   <MessageSquare className="w-3 h-3 opacity-70" /> Clarify
                 </button>
                 <button
-                  onClick={actionButtonMode === 'brainstorm' ? handleBrainstorm : handleRecap}
+                  onClick={
+                    actionButtonMode === 'brainstorm'
+                      ? handleBrainstorm
+                      : actionButtonMode === 'fact_check'
+                        ? handleFactCheck
+                        : handleRecap
+                  }
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium border transition-all active:scale-95 duration-200 interaction-base interaction-press whitespace-nowrap shrink-0 ${quickActionClass}`}
                   style={appearance.chipStyle}
                 >
                   {actionButtonMode === 'brainstorm' ? (
                     <>
                       <Lightbulb className="w-3 h-3 opacity-70" /> Brainstorm
+                    </>
+                  ) : actionButtonMode === 'fact_check' ? (
+                    <>
+                      <ShieldCheck className="w-3 h-3 opacity-70" /> Fact Check
                     </>
                   ) : (
                     <>

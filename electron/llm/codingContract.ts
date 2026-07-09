@@ -32,26 +32,26 @@ export const CODING_SECTION_HEADINGS: readonly string[] = CODING_SECTIONS.map(s 
  * The full contract text injected into prompts. Imperative, model-facing.
  * Keep this the ONLY place the prose lives.
  */
-export const CODING_CONTRACT = `CODING / DSA RESPONSE CONTRACT — output these EXACT markdown headings, in THIS order, with nothing before the first heading:
+export const CODING_CONTRACT = `CODING / DSA RESPONSE CONTRACT — output these EXACT markdown headings, in THIS order, with nothing before the first heading. Be terse: no preamble, do not restate the question, no closing remarks.
 
 ## Approach
-- Short, interview-speakable explanation of the idea. Optimized approach clearly; brute force only if useful.
+- AT MOST 2 short, interview-speakable bullets for the OPTIMAL approach only. Mention brute force only if explicitly asked.
 
 ## Technique / Data Structure / Algorithm Used
-- Name the core DSA concept/data structure/algorithm (e.g. two pointers, sliding window, hash map, stack, queue, binary search, DP, BFS/DFS, heap, trie, union-find, recursion, backtracking).
+- One line: name the core DSA concept/data structure/algorithm (e.g. two pointers, sliding window, hash map, stack, queue, binary search, DP, BFS/DFS, heap, trie, union-find, recursion, backtracking).
 
 ## Code
 - Clean, correct, interview-ready code in ONE fenced block with a language tag (\`\`\`python). Meaningful names, minimal comments. Do NOT start the answer with code — the \`## Approach\` heading comes first.
 
 ## Dry Run
-- Walk through ONE sample input step by step and show how the code reaches the output.
+- ONE small sample input, AT MOST 3 lines, showing how the code reaches the output. No second example.
 
 ## Complexity
 - Time Complexity: O(...), because ...
 - Space Complexity: O(...), because ...
 
 ## Interviewer Follow-up Points
-- Syntax/built-ins, edge cases, assumptions, duplicates, boundaries, tradeoffs, or optimizations the interviewer might probe.
+- AT MOST 3 bullets: edge cases, assumptions, duplicates, boundaries, tradeoffs, or optimizations the interviewer might probe.
 
 Every heading is mandatory and must appear verbatim (with the \`## \` prefix). Even a small/local model must emit every heading. A missing/renamed heading, or starting with code, is a format failure.`;
 
@@ -59,7 +59,7 @@ Every heading is mandatory and must appear verbatim (with the \`## \` prefix). E
  * A compact one-line variant of the contract for tiny-model prompts where token
  * budget is tight but the SAME heading contract must hold.
  */
-export const CODING_CONTRACT_TINY = `Coding/DSA answers MUST use these EXACT markdown headings, in order, nothing before the first: "## Approach", "## Technique / Data Structure / Algorithm Used", "## Code" (one fenced block with a language tag), "## Dry Run", "## Complexity" (Time + Space, each "O(...) because ..."), "## Interviewer Follow-up Points". Never start with code. A missing/renamed heading is a failure.`;
+export const CODING_CONTRACT_TINY = `Coding/DSA answers MUST use these EXACT markdown headings, in order, nothing before the first: "## Approach" (≤2 bullets, optimal only), "## Technique / Data Structure / Algorithm Used" (one line), "## Code" (one fenced block with a language tag), "## Dry Run" (one input, ≤3 lines), "## Complexity" (Time + Space, each "O(...) because ..."), "## Interviewer Follow-up Points" (≤3 bullets). Be terse: no preamble, never restate the question. Never start with code. A missing/renamed heading is a failure.`;
 
 /**
  * Optional verification-spec instruction. Appended to the coding prompt ONLY

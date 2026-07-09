@@ -78,6 +78,10 @@ export interface ScreenUnderstandingRequest {
   screenUnderstandingMode?: ScreenUnderstandingMode;
   technicalInterviewVisionFirst?: boolean;
   providerPolicy?: ProviderPolicy;
+  // Extract-then-solve (F2): when 'coding_problem', the vision model transcribes
+  // the on-screen problem verbatim (no solving) so a text-only coding model can
+  // solve it downstream. See visionPrompts.CODING_PROBLEM_EXTRACTION_SYSTEM_PROMPT.
+  extractionPurpose?: 'coding_problem';
 }
 
 export interface ProviderPolicy {
@@ -200,10 +204,14 @@ export class ScreenUnderstandingService {
       }
     }
 
-    // Cache lookup — same image within 5 min → reuse.
+    // Cache lookup — same image within 5 min → reuse. Extraction requests
+    // (extract-then-solve) must not reuse a cached DIRECT answer: a
+    // vision_direct result contains a solution, not the transcribed problem.
     if (imageHash) {
       const cached = this.cacheLookup(imageHash);
-      if (cached) return cached;
+      if (cached && !(request.extractionPurpose && cached.source !== 'vision_extract')) {
+        return cached;
+      }
     }
 
     // Build the provider list per mode. Production callers inject this via

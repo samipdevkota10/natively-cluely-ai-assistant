@@ -51,7 +51,12 @@ export type PiMilestone =
   | 'code_correction_used'
   | 'code_correction_error'
   | 'code_correction_reverified'
-  | 'code_verify_error';
+  | 'code_verify_error'
+  // Coding-interview optimization (F1/F2): per-answer model routing +
+  // extract-then-solve screenshot pipeline.
+  | 'coding_model_override'
+  | 'screen_extract_then_solve'
+  | 'screen_extract_fallback_multimodal';
 
 function monotonicNow(): number {
   try {

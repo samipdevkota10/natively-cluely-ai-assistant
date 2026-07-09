@@ -155,10 +155,17 @@ export const selectCustomContextForAnswer = (
   const excluded: CustomContextSelection['excluded'] = [];
 
   if (CUSTOM_CONTEXT_FORBIDDEN_TYPES.has(answerType)) {
-    if (classified.pinned.length) excluded.push({ category: 'pinned', reason: 'forbidden_for_answer_type' });
+    // Searchable facts and sensitive data stay forbidden here — they pollute a
+    // self-contained algorithmic/identity answer or risk leaking comp/strategy.
+    // PINNED chunks are different: short (<=160 char), non-sensitive STYLE
+    // directives ("be concise", "use Python") that shape HOW the answer reads
+    // without injecting facts. Allowing them lets per-mode answer-style
+    // instructions actually apply to coding/DSA/system-design answers — the
+    // exact thing a "Concise" preset needs. Sensitive precedence in
+    // classifyCustomContext guarantees salary/pricing can never be pinned.
     if (classified.searchable.length) excluded.push({ category: 'searchable', reason: 'forbidden_for_answer_type' });
     if (classified.sensitive.length) excluded.push({ category: 'sensitive', reason: 'forbidden_for_answer_type' });
-    return { included: [], excluded, sensitiveIncluded: false };
+    return { included: [...classified.pinned], excluded, sensitiveIncluded: false };
   }
 
   const included: CustomContextChunk[] = [...classified.pinned, ...classified.searchable];

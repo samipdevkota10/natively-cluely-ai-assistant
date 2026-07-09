@@ -28,6 +28,7 @@ interface ElectronAPI {
   moveWindowRight: () => Promise<void>;
   moveWindowUp: () => Promise<void>;
   moveWindowDown: () => Promise<void>;
+  moveWindowBy: (dx: number, dy: number) => Promise<void>;
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;
   windowClose: () => Promise<void>;
@@ -315,6 +316,7 @@ interface ElectronAPI {
     userRequest?: string,
   ) => Promise<{ refined: string | null; intent: string }>;
   generateRecap: () => Promise<{ summary: string | null }>;
+  generateFactCheck: () => Promise<{ result: string | null }>;
   submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>;
   getIntelligenceContext: () => Promise<{
     context: string;
@@ -334,6 +336,10 @@ interface ElectronAPI {
     error?: string;
   }>;
   resetIntelligence: () => Promise<{ success: boolean; error?: string }>;
+  // Smart Mode (F3): coding-interview bias toggle
+  getSmartMode: () => Promise<boolean>;
+  setSmartMode: (enabled: boolean) => Promise<{ success: boolean }>;
+  onSmartModeChanged: (callback: (enabled: boolean) => void) => () => void;
 
   // Meeting Lifecycle
   startMeeting: (metadata?: any) => Promise<{ success: boolean; error?: string }>;
@@ -380,6 +386,7 @@ interface ElectronAPI {
     callback: (data: { answer: string; intent: string }) => void,
   ) => () => void;
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void;
+  onIntelligenceFactCheck: (callback: (data: { result: string }) => void) => () => void;
   onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => () => void;
   onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => () => void;
   onIntelligenceManualStarted: (callback: () => void) => () => void;
@@ -397,7 +404,7 @@ interface ElectronAPI {
   // unused defense-in-depth bridges).
   onIntelligenceTokenBatch: (
     callback: (data: {
-      kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
+      kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'fact_check' | 'clarify' | 'follow_up_questions';
       items: any[];
     }) => void,
   ) => () => void;
@@ -1003,6 +1010,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   moveWindowRight: () => ipcRenderer.invoke('move-window-right'),
   moveWindowUp: () => ipcRenderer.invoke('move-window-up'),
   moveWindowDown: () => ipcRenderer.invoke('move-window-down'),
+  moveWindowBy: (dx: number, dy: number) => ipcRenderer.invoke('move-window-by', dx, dy),
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowMaximize: () => ipcRenderer.invoke('window-maximize'),
   windowClose: () => ipcRenderer.invoke('window-close'),
@@ -1393,6 +1401,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('generate-follow-up', intent, userRequest),
   generateFollowUpQuestions: () => ipcRenderer.invoke('generate-follow-up-questions'),
   generateRecap: () => ipcRenderer.invoke('generate-recap'),
+  generateFactCheck: () => ipcRenderer.invoke('generate-fact-check'),
   submitManualQuestion: (question: string) =>
     ipcRenderer.invoke('submit-manual-question', question),
   getIntelligenceContext: () => ipcRenderer.invoke('get-intelligence-context'),
@@ -1407,13 +1416,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Action Button Mode (Dynamic Recap / Brainstorm toggle)
   getActionButtonMode: () => ipcRenderer.invoke('get-action-button-mode'),
-  setActionButtonMode: (mode: 'recap' | 'brainstorm') =>
+  setActionButtonMode: (mode: 'recap' | 'brainstorm' | 'fact_check') =>
     ipcRenderer.invoke('set-action-button-mode', mode),
-  onActionButtonModeChanged: (callback: (mode: 'recap' | 'brainstorm') => void) => {
-    const subscription = (_: any, mode: 'recap' | 'brainstorm') => callback(mode);
+  onActionButtonModeChanged: (callback: (mode: 'recap' | 'brainstorm' | 'fact_check') => void) => {
+    const subscription = (_: any, mode: 'recap' | 'brainstorm' | 'fact_check') => callback(mode);
     ipcRenderer.on('action-button-mode-changed', subscription);
     return () => {
       ipcRenderer.removeListener('action-button-mode-changed', subscription);
+    };
+  },
+
+  // Smart Mode (F3): coding-interview bias toggle
+  getSmartMode: () => ipcRenderer.invoke('get-smart-mode'),
+  setSmartMode: (enabled: boolean) => ipcRenderer.invoke('set-smart-mode', enabled),
+  onSmartModeChanged: (callback: (enabled: boolean) => void) => {
+    const subscription = (_: any, enabled: boolean) => callback(enabled);
+    ipcRenderer.on('smart-mode-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('smart-mode-changed', subscription);
+    };
+  },
+
+  // Coding model override (coding-interview optimization)
+  getCodingModelOverride: () => ipcRenderer.invoke('get-coding-model-override'),
+  setCodingModelOverride: (value: { provider: string; model: string } | 'off' | 'auto') =>
+    ipcRenderer.invoke('set-coding-model-override', value),
+  onCodingModelOverrideChanged: (callback: (value: { provider: string; model: string } | 'off' | 'auto') => void) => {
+    const subscription = (_: any, value: { provider: string; model: string } | 'off' | 'auto') => callback(value);
+    ipcRenderer.on('coding-model-override-changed', subscription);
+    return () => {
+      ipcRenderer.removeListener('coding-model-override-changed', subscription);
     };
   },
 
@@ -1565,6 +1597,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('intelligence-recap', subscription);
     return () => {
       ipcRenderer.removeListener('intelligence-recap', subscription);
+    };
+  },
+  onIntelligenceFactCheck: (callback: (data: { result: string }) => void) => {
+    const subscription = (_: any, data: any) => callback(data);
+    ipcRenderer.on('intelligence-fact-check', subscription);
+    return () => {
+      ipcRenderer.removeListener('intelligence-fact-check', subscription);
     };
   },
   onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => {

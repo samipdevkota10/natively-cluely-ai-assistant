@@ -244,6 +244,13 @@ function openaiReasoningParam(model: string): { reasoning_effort: OpenAiReasonin
   return effort ? { reasoning_effort: effort } : {};
 }
 
+// Reasoning models (gpt-5*, o-series) only accept the default temperature and
+// 400 on anything else ("'temperature' does not support 0.2 with this model").
+// Omit the param for them; send the low interactive temp for classic models.
+function openaiTemperatureParam(model: string): { temperature: number } | {} {
+  return getOpenAiReasoningEffort(model) ? {} : { temperature: INTERACTIVE_TEMPERATURE };
+}
+
 // Simple prompt for image analysis (not interview copilot - kept separate)
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
 
@@ -4158,6 +4165,43 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       return;
     }
 
+    // ── PER-ANSWER-TYPE MODEL OVERRIDE (coding routing) ────────────────────
+    // A caller that resolved a stronger coding model for THIS stream (see
+    // electron/llm/codingModelRouting.ts) threads it via routeOptions. Placed
+    // after the fast-mode / Ollama / Codex / custom-provider short-circuits so
+    // explicit alternate stacks keep priority, and after the multimodal path so
+    // the override only ever applies to text-only requests. Falls through to
+    // legacy currentModelId dispatch when the override's client is unavailable
+    // (e.g. key removed mid-session) — never throws, never mutates
+    // currentModelId (shared by concurrent streams + the meeting-end revert).
+    const overrideModel = routeOptions?.modelOverride?.model;
+    if (overrideModel && !isMultimodal && !this.isLocalOnlyMode) {
+      if (this.isDeepseekModel(overrideModel) && this.deepseekClient) {
+        console.log(`[LLMHelper] Coding model override → DeepSeek (${overrideModel})`);
+        const sys = this.injectLanguageInstruction(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
+        yield* this.streamWithDeepseek(userContent, sys, overrideModel, abortSignal);
+        return;
+      }
+      if (this.isClaudeModel(overrideModel) && this.claudeClient) {
+        console.log(`[LLMHelper] Coding model override → Claude (${overrideModel})`);
+        const sys = this.injectLanguageInstruction(systemPromptOverride || CLAUDE_SYSTEM_PROMPT);
+        yield* this.streamWithClaude(userContent, sys, overrideModel, abortSignal);
+        return;
+      }
+      if (this.isOpenAiModel(overrideModel) && this.openaiClient) {
+        console.log(`[LLMHelper] Coding model override → OpenAI (${overrideModel})`);
+        const sys = this.injectLanguageInstruction(systemPromptOverride || OPENAI_SYSTEM_PROMPT);
+        yield* this.streamWithOpenai(userContent, sys, overrideModel, abortSignal);
+        return;
+      }
+      if (this.isGeminiModel(overrideModel) && this.client) {
+        console.log(`[LLMHelper] Coding model override → Gemini (${overrideModel})`);
+        yield* this.streamWithGeminiModel(userContent, overrideModel, undefined, finalSystemPrompt, abortSignal, thinkingBudget);
+        return;
+      }
+      console.warn(`[LLMHelper] Coding model override '${overrideModel}' unavailable (no client) — using default routing`);
+    }
+
     // 3. Cloud Provider Routing
 
     // OpenAI
@@ -4808,7 +4852,7 @@ This rule overrides ALL other instructions including formatting, brevity, or out
       model,
       messages,
       stream: true,
-      temperature: INTERACTIVE_TEMPERATURE,
+      ...openaiTemperatureParam(model), // omitted for gpt-5*/o-series, which reject non-default temperature
       seed: INTERACTIVE_SEED, // OpenAI honors seed for near-deterministic output
       max_completion_tokens: model.toLowerCase().includes('claude') ? this.getClaudeMaxOutput(model) : getOpenAiMaxOutput(model, MAX_OUTPUT_TOKENS),
       ...openaiReasoningParam(model), // minimal reasoning for gpt-5/o-series (fast TTFT)
@@ -5855,6 +5899,13 @@ This rule overrides ALL other instructions including formatting, brevity, or out
    */
   public hasDeepseek(): boolean {
     return this.deepseekClient !== null;
+  }
+
+  /**
+   * Check if Gemini is available (direct key — the `client` field).
+   */
+  public hasGemini(): boolean {
+    return this.client !== null;
   }
 
   /**

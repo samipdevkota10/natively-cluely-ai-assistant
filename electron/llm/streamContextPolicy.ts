@@ -30,6 +30,14 @@ export interface StreamRouteOptions {
   answerType?: AnswerType;
   /** The plan's forbidden context layers — the authoritative exclusion list. */
   forbiddenContextLayers?: ContextLayer[];
+  /**
+   * Per-stream model override (coding-model routing). When present and the
+   * override's client is available, `_streamChatInner` dispatches THIS stream
+   * to that provider/model instead of `currentModelId` — without mutating any
+   * global state. Absent / unavailable → legacy dispatch (no behavior change).
+   * Resolved by `resolveCodingModelOverride` (electron/llm/codingModelRouting.ts).
+   */
+  modelOverride?: { provider: string; model: string };
 }
 
 /**

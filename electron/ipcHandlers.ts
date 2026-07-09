@@ -51,6 +51,11 @@ export function initializeIpcHandlers(appState: AppState): void {
    * Used to gate profile intelligence features (resume upload, JD upload, company research, etc.).
    */
   const isProOrTrialActive = (): boolean => {
+    // 0. Local unlock — lets a self-hosted build (own AI provider, no premium
+    // submodule/license) use Modes without a Pro license. Opt-in only: set
+    // NATIVELY_LOCAL_MODES=1, or run an unpackaged dev build.
+    if (process.env.NATIVELY_LOCAL_MODES === '1' || !app.isPackaged) return true;
+
     // 1. Full premium license (Dodo / Gumroad / Natively API subscription)
     try {
       const { LicenseManager } = require('../premium/electron/services/LicenseManager');
@@ -738,11 +743,20 @@ export function initializeIpcHandlers(appState: AppState): void {
           manualActiveMode = ModesManager.getInstance().getActiveModeInfo();
         } catch { /* mode prior unavailable — planAnswer stays mode-blind */ }
 
+        // Smart Mode (F3): coding-interview bias — read defensively like the
+        // mode prior above; unavailable settings keep the planner unbiased.
+        let manualSmartMode = false;
+        try {
+          const { SettingsManager } = require('./services/SettingsManager');
+          manualSmartMode = SettingsManager.getInstance().get('smartModeEnabled') === true;
+        } catch { /* smart mode unavailable — planner stays unbiased */ }
+
         const answerPlan = planAnswer({
           question: message,
           source: 'manual_input',
           speakerPerspective: 'user',
           activeMode: manualActiveMode,
+          smartMode: manualSmartMode,
         });
         const isCodingChat = isCodingAnswerType(answerPlan.answerType);
         chatTrace.mark('answer_type_selected', { answerType: answerPlan.answerType, isCoding: isCodingChat });
@@ -1613,6 +1627,11 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('move-window-down', async () => {
     appState.moveWindowDown();
+  });
+
+  // Relative drag move — driven by the renderer's manual pill drag handler.
+  safeHandle('move-window-by', async (_event, dx: number, dy: number) => {
+    appState.moveWindowBy(dx, dy);
   });
 
   safeHandle('center-and-show-window', async () => {
@@ -2862,14 +2881,15 @@ export function initializeIpcHandlers(appState: AppState): void {
       const creds = CredentialsManager.getInstance().getAllCredentials();
 
       // Return masked versions for security (just indicate if set)
+      // Also check process.env as fallback so .env keys are recognized during development
       const hasKey = (key?: string) => !!(key && key.trim().length > 0);
 
       return {
-        hasGeminiKey: hasKey(creds.geminiApiKey),
-        hasGroqKey: hasKey(creds.groqApiKey),
-        hasOpenaiKey: hasKey(creds.openaiApiKey),
-        hasClaudeKey: hasKey(creds.claudeApiKey),
-        hasDeepseekKey: hasKey(creds.deepseekApiKey),
+        hasGeminiKey: hasKey(creds.geminiApiKey) || hasKey(process.env.GEMINI_API_KEY),
+        hasGroqKey: hasKey(creds.groqApiKey) || hasKey(process.env.GROQ_API_KEY),
+        hasOpenaiKey: hasKey(creds.openaiApiKey) || hasKey(process.env.OPENAI_API_KEY),
+        hasClaudeKey: hasKey(creds.claudeApiKey) || hasKey(process.env.CLAUDE_API_KEY),
+        hasDeepseekKey: hasKey(creds.deepseekApiKey) || hasKey(process.env.DEEPSEEK_API_KEY),
         hasLitellmBaseURL: hasKey(creds.litellmBaseURL),
         // The base URL is config, not a secret — returned in full so Settings can
         // prefill it (unlike API keys, which are only reported as booleans).
@@ -4592,7 +4612,10 @@ export function initializeIpcHandlers(appState: AppState): void {
     return sm.get('actionButtonMode') ?? 'recap';
   });
 
-  safeHandle('set-action-button-mode', (_, mode: 'recap' | 'brainstorm') => {
+  safeHandle('set-action-button-mode', (_, mode: 'recap' | 'brainstorm' | 'fact_check') => {
+    if (mode !== 'recap' && mode !== 'brainstorm' && mode !== 'fact_check') {
+      throw new Error('Invalid action button mode');
+    }
     const { SettingsManager } = require('./services/SettingsManager');
     const sm = SettingsManager.getInstance();
     sm.set('actionButtonMode', mode);
@@ -4600,6 +4623,66 @@ export function initializeIpcHandlers(appState: AppState): void {
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
         win.webContents.send('action-button-mode-changed', mode);
+      }
+    });
+
+    return { success: true };
+  });
+
+  // Smart Mode (F3): coding-interview bias toggle. Persisted; broadcast so the
+  // TopPill lightning toggle and the Settings mirror stay in sync.
+  safeHandle('get-smart-mode', () => {
+    const { SettingsManager } = require('./services/SettingsManager');
+    return SettingsManager.getInstance().get('smartModeEnabled') === true;
+  });
+
+  safeHandle('set-smart-mode', (_, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') {
+      throw new Error('Invalid smart mode value');
+    }
+    const { SettingsManager } = require('./services/SettingsManager');
+    SettingsManager.getInstance().set('smartModeEnabled', enabled);
+
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('smart-mode-changed', enabled);
+      }
+    });
+
+    return { success: true };
+  });
+
+  // Coding model override (coding-interview optimization). 'auto' (default)
+  // routes coding/DSA/system-design/debugging answers to DeepSeek V4 Pro when
+  // a DeepSeek key exists; 'off' disables; {provider, model} is an explicit pick.
+  safeHandle('get-coding-model-override', () => {
+    const { SettingsManager } = require('./services/SettingsManager');
+    const sm = SettingsManager.getInstance();
+    return sm.get('codingModelOverride') ?? 'auto';
+  });
+
+  safeHandle('set-coding-model-override', (_, value: { provider: string; model: string } | 'off' | 'auto') => {
+    // Validate the renderer-supplied value: only the two literals or a
+    // {provider, model} pair with an allow-listed provider are accepted.
+    const CODING_OVERRIDE_PROVIDERS = ['deepseek', 'claude', 'openai', 'gemini'];
+    let normalized: { provider: string; model: string } | 'off' | 'auto';
+    if (value === 'off' || value === 'auto') {
+      normalized = value;
+    } else if (
+      value && typeof value === 'object' &&
+      typeof value.provider === 'string' && CODING_OVERRIDE_PROVIDERS.includes(value.provider) &&
+      typeof value.model === 'string' && value.model.length > 0 && value.model.length <= 100
+    ) {
+      normalized = { provider: value.provider, model: value.model };
+    } else {
+      throw new Error('Invalid coding model override value');
+    }
+    const { SettingsManager } = require('./services/SettingsManager');
+    SettingsManager.getInstance().set('codingModelOverride', normalized);
+
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('coding-model-override-changed', normalized);
       }
     });
 
@@ -4641,6 +4724,26 @@ export function initializeIpcHandlers(appState: AppState): void {
         } catch (_) {}
       }
       return { summary };
+    } catch (error: any) {
+      throw error;
+    }
+  });
+
+  // Fact Check (F5): verifies the most recent checkable claim in conversation.
+  safeHandle('generate-fact-check', async () => {
+    try {
+      const intelligenceManager = appState.getIntelligenceManager();
+      const result = await intelligenceManager.runFactCheck();
+      if (result) {
+        try {
+          PhoneMirrorService.getInstance().publishAssistantMessage(
+            crypto.randomUUID(),
+            result,
+            'Fact Check',
+          );
+        } catch (_) {}
+      }
+      return { result };
     } catch (error: any) {
       throw error;
     }

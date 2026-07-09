@@ -41,7 +41,9 @@ describe('W5: pipeline shape (source pins)', () => {
 
     test('mode retrieval is kicked as a promise and handed to generateStream', () => {
         assert.match(engineSrc, /const modeContextPromise: Promise<string>/);
-        assert.match(engineSrc, /generateStream\([^)]*modeContextPromise\)/s);
+        // modeContextPromise must appear in the generateStream arg list (trailing
+        // args after it are fine — e.g. the coding model override).
+        assert.match(engineSrc, /generateStream\([^)]*modeContextPromise/s);
     });
 
     test('the floating intent promise carries an inline rejection handler', () => {

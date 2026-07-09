@@ -955,6 +955,14 @@ export class WindowHelper {
     this.moveActiveWindow(0, -this.step);
   }
 
+  // Relative move by an arbitrary pixel delta. Drives renderer-side mouse
+  // dragging of the overlay (the CSS -webkit-app-region drag is unreliable on
+  // a transparent window that toggles setIgnoreMouseEvents).
+  public moveWindowBy(dx: number, dy: number): void {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    this.moveActiveWindow(Math.round(dx), Math.round(dy));
+  }
+
   private showContextMenu(win: BrowserWindow, point: { x: number; y: number }): void {
     const template: Electron.MenuItemConstructorOptions[] = [
       {

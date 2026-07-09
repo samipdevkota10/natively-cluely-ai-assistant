@@ -85,25 +85,29 @@ describe('selectCustomContextForAnswer — sensitive gating by answer type', () 
     assert.ok(sel.included.some(c => /concise/i.test(c.text)));
     assert.ok(sel.included.some(c => /payments/i.test(c.text)));
   });
-  test('coding answer sees NO custom context at all (forbidden layer)', () => {
+  test('coding answer sees ONLY pinned style directives, never facts/sensitive', () => {
     const sel = selectCustomContextForAnswer(classified, 'coding_question_answer');
-    assert.equal(sel.included.length, 0);
+    assert.ok(sel.included.some(c => /concise/i.test(c.text)), 'pinned style directive survives');
+    assert.ok(!sel.included.some(c => /payments/i.test(c.text)), 'searchable fact dropped');
+    assert.ok(!sel.included.some(c => /CTC|LPA/.test(c.text)), 'sensitive dropped');
     assert.equal(sel.sensitiveIncluded, false);
   });
-  test('dsa answer sees NO custom context at all', () => {
+  test('dsa answer sees ONLY pinned style directives', () => {
     const sel = selectCustomContextForAnswer(classified, 'dsa_question_answer');
-    assert.equal(sel.included.length, 0);
+    assert.ok(sel.included.every(c => /concise/i.test(c.text)), 'only pinned survives');
+    assert.ok(!sel.included.some(c => /payments|CTC|LPA/.test(c.text)));
   });
-  test('identity answer sees NO custom context (self-contained)', () => {
+  test('identity answer sees ONLY pinned style directives (no facts)', () => {
     const sel = selectCustomContextForAnswer(classified, 'identity_answer');
-    assert.equal(sel.included.length, 0);
+    assert.ok(!sel.included.some(c => /payments|CTC|LPA/.test(c.text)));
   });
 });
 
 describe('buildScopedCustomContext — end-to-end rendering', () => {
-  test('coding answer renders empty scoped context', () => {
+  test('coding answer renders pinned style directives only, drops sensitive', () => {
     const { text } = buildScopedCustomContext('Be concise.\n\nSalary is 30 LPA.', 'coding_question_answer');
-    assert.equal(text, '');
+    assert.match(text, /concise/i);
+    assert.doesNotMatch(text, /Salary|LPA/);
   });
   test('behavioral answer keeps pinned+searchable, drops sensitive', () => {
     const { text } = buildScopedCustomContext('Be concise.\n\nI shipped a data pipeline.\n\nMy CTC is 30 LPA.', 'behavioral_interview_answer');
@@ -160,6 +164,28 @@ describe('SENSITIVE_RE hardening — adversarial comp/pricing phrasings must NOT
     assert.equal(classifyCustomContext('I prefer Python and Go.').sensitive.length, 0);
     assert.equal(classifyCustomContext('Be concise and confident.').sensitive.length, 0);
     assert.equal(classifyCustomContext('I led a team of five engineers.').sensitive.length, 0);
+  });
+});
+
+describe('Concise preset — system-design directives are pinned and survive into design/coding answers', () => {
+  // The two system-design lines added to CONCISE_PRESET (ModesSettings.tsx) must
+  // start with an imperative opener so they classify as PINNED — the only category
+  // that survives into system_design/coding answers (searchable/sensitive are
+  // forbidden there). A noun-led line would fall to searchable and be dropped.
+  const SD_LINES = [
+    'Keep system design design-first, with at most two short bullets per section.',
+    'Always state just the single sharpest tradeoff; skip a section that adds nothing non-obvious.',
+  ];
+  for (const line of SD_LINES) {
+    test(`"${line.slice(0, 32)}…" → pinned`, () => {
+      const c = classifyCustomContext(line);
+      assert.equal(c.pinned.length, 1, `expected pinned, got searchable=${c.searchable.length} sensitive=${c.sensitive.length}`);
+    });
+  }
+  test('both lines survive into a system_design_answer', () => {
+    const { text } = buildScopedCustomContext(SD_LINES.join('\n'), 'system_design_answer');
+    assert.match(text, /design-first/i);
+    assert.match(text, /sharpest tradeoff/i);
   });
 });
 

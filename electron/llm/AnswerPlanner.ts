@@ -145,7 +145,31 @@ export interface PlanAnswerInput {
    * Optional — absent keeps the mode-blind behavior byte-for-byte.
    */
   activeMode?: ActiveModeInfo | null;
+  /**
+   * SMART MODE (F3, coding-interview optimization): when true, ambiguous
+   * questions that landed on a FLOOR type (unknown/general/follow_up) and
+   * carry a technical cue are re-routed to the coding/DSA answer types so the
+   * coding contract + coding model routing engage. Explicitly-matched routes
+   * (behavioral, identity, negotiation, …) are NEVER overridden. Optional —
+   * absent/false keeps behavior byte-for-byte.
+   */
+  smartMode?: boolean;
 }
+
+// SMART MODE (F3) — the only answer types the bias may rewrite. These are the
+// classification FLOOR (nothing explicit matched), so rewriting them can never
+// override a deliberate behavioral/identity/negotiation/profile route.
+const SMART_MODE_FLOOR_TYPES: ReadonlySet<AnswerType> = new Set([
+  'unknown_answer',
+  'general_meeting_answer',
+  'follow_up_answer',
+]);
+// Complexity/algorithm cues → DSA answer (contract with Big-O discussion).
+const SMART_MODE_DSA_CUE_RE =
+  /\b(?:time|space)\s+complexity\b|\bbig[\s-]?o(?:h)?\b|\bo\(\s*(?:1|n|log|n\s*log|n\^?2|2\^?n|m\s*\+?\s*n|[a-z0-9^*+\s]+)\s*\)|\b(?:optimi[sz]e|speed up|faster)\b[^.?!]{0,40}\b(?:runtime|solution|algorithm|approach|loop|lookup)\b|\balgorithm\b|\bbrute[\s-]?force\b/i;
+// General coding cues → coding answer (full coding contract).
+const SMART_MODE_CODING_CUE_RE =
+  /\b(?:code|coding|pseudocode|functions?|method signatures?|implement(?:ation)?|refactor|debug(?:ging)?|stack traces?|compil(?:e|er|ation)|runtime errors?|exceptions?|edge cases?|test cases?|unit tests?|recursion|recursive|iterative|pointers?|arrays?|string manipulation|linked lists?|hash\s?(?:maps?|tables?|sets?)|binary (?:trees?|search)|heaps?|graph traversal|memory (?:usage|leaks?)|off[\s-]by[\s-]one)\b/i;
 
 // Derives from the single canonical CODING_CONTRACT (codingContract.ts) so the
 // planner's template can never drift from the prompts/validator. Adds the two
@@ -261,28 +285,28 @@ Justification:
 Closing:
 [Collaborative next step.]`;
 
-const SYSTEM_DESIGN_TEMPLATE = `Use exactly these sections:
+const SYSTEM_DESIGN_TEMPLATE = `Use exactly these sections. Lead with the design; be terse and speakable. NO preamble, do not restate the question. Each section is AT MOST 2 bullets, each bullet one short line (~12 words). If a section has nothing non-obvious to add, write a single line and move on.
 
 Clarify Requirements:
-[State the most important assumptions or questions.]
+[ONE line: the single load-bearing assumption or scale figure.]
 
 High-Level Design:
-[Architecture overview.]
+[≤2 bullets: the architecture in one breath.]
 
 Core Components:
-[Main services/components and responsibilities.]
+[≤2 bullets: the main services and their one-line responsibility.]
 
 Data Flow:
-[How requests/data move through the system.]
+[≤2 bullets: how a request moves through the system.]
 
 Scaling / Reliability:
-[Scale, fault tolerance, observability.]
+[≤2 bullets: the key scale/fault-tolerance move only.]
 
 Tradeoffs:
-[Key design tradeoffs.]
+[≤2 bullets: the sharpest tradeoff, stated as a choice.]
 
 Follow-up Points:
-[Likely interviewer follow-ups.]`;
+[≤2 bullets: the likeliest interviewer probes.]`;
 
 const DEBUGGING_TEMPLATE = `Use exactly these sections:
 
@@ -2035,6 +2059,21 @@ export const planAnswer = (input: PlanAnswerInput): AnswerPlan => {
     // or any explicitly-matched type above is never touched, so every leak
     // invariant (coding/identity/negotiation routing) is preserved.
     answerType = applyModeFallback(answerType, true, input.source, input.activeMode);
+  }
+
+  // SMART MODE (F3): coding-interview bias on ambiguous FLOOR types only.
+  // A fragment like "can you do it in O(n)?" or "what about edge cases?" that
+  // fell through every explicit route gets re-routed to a coding answer type
+  // when it carries a technical cue. Explicit routes (behavioral, identity,
+  // negotiation, profile, …) resolved above are never touched, so all leak
+  // invariants hold. profileContextPolicy derives from answerType below, so it
+  // follows the rewrite automatically.
+  if (input.smartMode && SMART_MODE_FLOOR_TYPES.has(answerType)) {
+    if (SMART_MODE_DSA_CUE_RE.test(text)) {
+      answerType = 'dsa_question_answer';
+    } else if (SMART_MODE_CODING_CUE_RE.test(text)) {
+      answerType = 'coding_question_answer';
+    }
   }
 
   const speakerPerspective = input.speakerPerspective

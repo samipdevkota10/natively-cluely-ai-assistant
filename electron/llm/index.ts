@@ -9,6 +9,7 @@ export { CodeHintLLM } from "./CodeHintLLM";
 export { FollowUpLLM } from "./FollowUpLLM";
 export { FollowUpQuestionsLLM } from "./FollowUpQuestionsLLM";
 export { RecapLLM } from "./RecapLLM";
+export { FactCheckLLM } from "./FactCheckLLM";
 export { WhatToAnswerLLM } from "./WhatToAnswerLLM";
 export { shouldThrottleTrigger } from "./triggerGate";
 export type { TriggerGateInput } from "./triggerGate";
@@ -65,6 +66,8 @@ export {
 export type { FollowUpContext, ResolvedFollowUp, FollowUpSurface } from "./FollowUpResolver";
 export { renderCodingAnswerMarkdown, repairCodingAnswer, repairCodingMarkdown, validateAnswerStructure, validateCodingMarkdown, buildCodingScaffold } from "./AnswerValidator";
 export type { AnswerValidationResult, CodingAnswer } from "./AnswerValidator";
+export { resolveCodingModelOverride, CODING_ROUTED_ANSWER_TYPES, DEFAULT_CODING_PROVIDER, DEFAULT_CODING_MODEL } from "./codingModelRouting";
+export type { CodingModelOverride, CodingModelOverrideSetting, CodingProviderAvailability } from "./codingModelRouting";
 export { validateProfileOutput, buildProfileRepairInstruction, stripProfileTokensFromCoding, sanitizeCandidateAnswer, CANDIDATE_VOICE_ANSWER_TYPES } from "./ProfileOutputValidator";
 export type { ProfileValidationResult, ProfileViolation, ProfileViolationCode, ProfileValidationInput, CandidateSanitizeResult } from "./ProfileOutputValidator";
 export { validateProfileEvidence } from "./profileEvidenceValidator";

@@ -4234,7 +4234,7 @@ export class AppState {
     // are NO LONGER USED for these 5 streams. The single
     // 'intelligence-token-batch' channel replaces them. The old channel
     // names + preload bridges are kept (defense-in-depth, no callers).
-    type BatchKind = 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions';
+    type BatchKind = 'suggested_answer' | 'refined_answer' | 'recap' | 'fact_check' | 'clarify' | 'follow_up_questions';
     const tokenBatches = new Map<BatchKind, any[]>();
     let batchFlushScheduled = false;
     const flushBatchesNow = () => {
@@ -4379,6 +4379,18 @@ export class AppState {
     this.intelligenceManager.on('recap_token', (token: string) => {
       // Sprint 9: batch.
       queueBatch('recap', { token });
+    })
+
+    this.intelligenceManager.on('fact_check', (result: string) => {
+      flushBatchesBeforeFinal();
+      const win = mainWindow()
+      if (win) {
+        win.webContents.send('intelligence-fact-check', { result })
+      }
+    })
+
+    this.intelligenceManager.on('fact_check_token', (token: string) => {
+      queueBatch('fact_check', { token });
     })
 
     this.intelligenceManager.on('clarify', (clarification: string) => {
@@ -4772,6 +4784,9 @@ export class AppState {
   }
   public moveWindowUp(): void {
     this.windowHelper.moveWindowUp()
+  }
+  public moveWindowBy(dx: number, dy: number): void {
+    this.windowHelper.moveWindowBy(dx, dy)
   }
 
   public centerAndShowWindow(): void {

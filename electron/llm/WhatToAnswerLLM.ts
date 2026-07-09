@@ -122,7 +122,11 @@ export class WhatToAnswerLLM {
         // same budget race + scope/route gates below still apply; when the
         // route forbids reference_files the prefetched result is DISCARDED, so
         // the leak surface is identical to fetching here.
-        preFetchedModeContext?: Promise<string>
+        preFetchedModeContext?: Promise<string>,
+        // Per-stream coding model override resolved by the caller (see
+        // electron/llm/codingModelRouting.ts). Threaded to streamChat via
+        // StreamRouteOptions.modelOverride; null/undefined → legacy routing.
+        modelOverride?: { provider: string; model: string } | null
     ): AsyncGenerator<string> {
         const MEASURE = process.env.MEASURE_LATENCY === 'true';
         let tStart = 0, tIntent = 0, tTemporal = 0, tMode = 0, tTrunc = 0, tPrompt = 0, tStreamStart = 0;
@@ -273,12 +277,17 @@ ANSWER SHAPE: ${intentResult.answerShape}
             // ── PINNED MODE INSTRUCTIONS (PI v3, W2) ──────────────────────────
             // The mode's user-authored "Real-time prompt" (customContext) must
             // apply on EVERY answer, not only when retrieval happens to score it.
-            // Gated on the context route's custom_context layer (coding/identity
-            // answers still exclude it) and sensitivity-scoped inside
-            // getActiveModePinnedInstructions (salary/pricing notes can't leak
-            // into non-negotiation answers). Skill mode owns its prompt — skip.
+            // We do NOT gate on the custom_context layer here: that layer governs
+            // FACTS (resume bullets, notes, salary) which must stay out of a
+            // coding/identity answer. Short imperative STYLE directives ("be
+            // concise", "use Python") are different — they shape HOW the answer
+            // reads without injecting facts, and a user expects them to apply to
+            // coding answers too. getActiveModePinnedInstructions self-scopes by
+            // answerType: for custom_context-forbidden types it returns ONLY the
+            // pinned style directives (searchable facts + sensitive comp/pricing
+            // are still dropped), so this can't leak. Skill mode owns its prompt.
             let pinnedModeInstructions = '';
-            if (!activeSkill && (!answerPlan || isLayerAllowed(answerPlan, 'custom_context'))) {
+            if (!activeSkill) {
                 try {
                     const modesManager = this.getModesManager();
                     pinnedModeInstructions = modesManager.getActiveModePinnedInstructions?.(answerPlan?.answerType) || '';
@@ -430,7 +439,14 @@ ANSWER SHAPE: ${intentResult.answerShape}
             const wtaThinkingBudget = this.llmHelper.thinkingBudgetForAnswerType?.(
                 Boolean(answerPlan && isCodingAnswerType(answerPlan.answerType)),
             );
-            for await (const token of this.llmHelper.streamChat(packet.userMessage, imagePaths, undefined, finalPromptOverride, true, true, packetScopes, undefined, wtaThinkingBudget)) {
+            // Route options: answer type for downstream scoping + the optional
+            // per-stream coding model override. imagePaths-bearing requests are
+            // handled by the vision chain inside streamChat; the override only
+            // engages on the text-only dispatch path (see _streamChatInner).
+            const wtaRouteOptions = (answerPlan?.answerType || modelOverride)
+                ? { answerType: answerPlan?.answerType, modelOverride: modelOverride ?? undefined }
+                : undefined;
+            for await (const token of this.llmHelper.streamChat(packet.userMessage, imagePaths, undefined, finalPromptOverride, true, true, packetScopes, undefined, wtaThinkingBudget, wtaRouteOptions)) {
                 if (MEASURE) {
                     const now = performance.now();
                     if (!tFirstToken) tFirstToken = now;

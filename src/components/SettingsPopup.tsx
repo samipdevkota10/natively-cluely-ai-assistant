@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { MessageSquare, Camera, Zap, User } from 'lucide-react';
+import { MessageSquare, Camera, Zap, User, ShieldCheck } from 'lucide-react';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { getModifierSymbol } from '../utils/platformUtils';
@@ -143,7 +143,7 @@ const SettingsPopup = () => {
         }
     }, [useGroqFastText]);
 
-    const [actionButtonMode, setActionButtonModeState] = useState<'recap' | 'brainstorm'>('recap');
+    const [actionButtonMode, setActionButtonModeState] = useState<'recap' | 'brainstorm' | 'fact_check'>('recap');
 
     const [showTranscript, setShowTranscript] = useState(() => {
         const stored = localStorage.getItem('natively_interviewer_transcript');
@@ -163,14 +163,30 @@ const SettingsPopup = () => {
     // Load action button mode and subscribe to changes from other windows
     useEffect(() => {
         // @ts-ignore
-        window.electronAPI?.getActionButtonMode?.()?.then((mode: 'recap' | 'brainstorm') => {
+        window.electronAPI?.getActionButtonMode?.()?.then((mode: 'recap' | 'brainstorm' | 'fact_check') => {
             setActionButtonModeState(mode ?? 'recap');
         }).catch(() => {});
         // @ts-ignore
         if (!window.electronAPI?.onActionButtonModeChanged) return;
         // @ts-ignore
-        const unsubscribe = window.electronAPI.onActionButtonModeChanged((mode: 'recap' | 'brainstorm') => {
+        const unsubscribe = window.electronAPI.onActionButtonModeChanged((mode: 'recap' | 'brainstorm' | 'fact_check') => {
             setActionButtonModeState(mode);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    // Smart Mode (F3): coding-interview bias toggle — mirrors the TopPill lightning.
+    const [smartMode, setSmartModeState] = useState<boolean>(false);
+    useEffect(() => {
+        // @ts-ignore
+        window.electronAPI?.getSmartMode?.()?.then((enabled: boolean) => {
+            setSmartModeState(Boolean(enabled));
+        }).catch(() => {});
+        // @ts-ignore
+        if (!window.electronAPI?.onSmartModeChanged) return;
+        // @ts-ignore
+        const unsubscribe = window.electronAPI.onSmartModeChanged((enabled: boolean) => {
+            setSmartModeState(Boolean(enabled));
         });
         return () => unsubscribe();
     }, []);
@@ -328,6 +344,51 @@ const SettingsPopup = () => {
                         className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${actionButtonMode === 'brainstorm' ? 'bg-violet-500 shadow-[0_2px_10px_rgba(139,92,246,0.3)]' : defaultToggleTrackClass}`}
                     >
                         <div className={`w-[15px] h-[15px] rounded-full transition-transform duration-300 ease-spring ${toggleKnobClass} ${actionButtonMode === 'brainstorm' ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                    </button>
+                </div>
+
+                {/* Fact Check Mode Toggle — repurposes the same action button. Both this
+                    and Interview Mode write actionButtonMode, so enabling one disables
+                    the other; both off → Recap. */}
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
+                    <div className="flex items-center gap-2.5">
+                        <ShieldCheck className={`w-3.5 h-3.5 transition-colors ${actionButtonMode === 'fact_check' ? 'text-emerald-400' : inactiveIconColorClass}`} />
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Fact Check Mode</span>
+                    </div>
+                    <button
+                        onClick={async () => {
+                            const newMode: 'recap' | 'fact_check' = actionButtonMode === 'fact_check' ? 'recap' : 'fact_check';
+                            setActionButtonModeState(newMode);
+                            try {
+                                // @ts-ignore
+                                await window.electronAPI?.setActionButtonMode?.(newMode);
+                            } catch (e) { console.error(e); }
+                        }}
+                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${actionButtonMode === 'fact_check' ? 'bg-emerald-500 shadow-[0_2px_10px_rgba(16,185,129,0.3)]' : defaultToggleTrackClass}`}
+                    >
+                        <div className={`w-[15px] h-[15px] rounded-full transition-transform duration-300 ease-spring ${toggleKnobClass} ${actionButtonMode === 'fact_check' ? 'translate-x-[12px]' : 'translate-x-0'}`} />
+                    </button>
+                </div>
+
+                {/* Smart Mode (F3) — coding-interview bias. Mirrors the TopPill
+                    lightning toggle via the smart-mode-changed broadcast. */}
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors duration-200 group cursor-default ${itemHoverClass} ${glassRowClass}`}>
+                    <div className="flex items-center gap-2.5">
+                        <Zap className={`w-3.5 h-3.5 transition-colors ${smartMode ? 'text-amber-400' : inactiveIconColorClass}`} fill={smartMode ? 'currentColor' : 'none'} />
+                        <span className={`text-[12px] font-medium transition-colors ${labelColorClass}`}>Smart Mode</span>
+                    </div>
+                    <button
+                        onClick={async () => {
+                            const next = !smartMode;
+                            setSmartModeState(next);
+                            try {
+                                // @ts-ignore
+                                await window.electronAPI?.setSmartMode?.(next);
+                            } catch (e) { console.error(e); }
+                        }}
+                        className={`w-[30px] h-[18px] rounded-full p-[1.5px] transition-all duration-300 ease-spring active:scale-[0.92] ${smartMode ? 'bg-amber-500 shadow-[0_2px_10px_rgba(245,158,11,0.3)]' : defaultToggleTrackClass}`}
+                    >
+                        <div className={`w-[15px] h-[15px] rounded-full transition-transform duration-300 ease-spring ${toggleKnobClass} ${smartMode ? 'translate-x-[12px]' : 'translate-x-0'}`} />
                     </button>
                 </div>
 

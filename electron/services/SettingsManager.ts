@@ -9,7 +9,7 @@ export interface AppSettings {
     isUndetectable?: boolean;
     disguiseMode?: 'terminal' | 'settings' | 'activity' | 'none';
     verboseLogging?: boolean;
-    actionButtonMode?: 'recap' | 'brainstorm';
+    actionButtonMode?: 'recap' | 'brainstorm' | 'fact_check';
     groqFastTextMode?: boolean;
     codexCliEnabled?: boolean;
     codexCliPath?: string;
@@ -72,6 +72,25 @@ export interface AppSettings {
     enableLiveSessionMemory?: boolean;
     liveSessionMemoryKillSwitch?: boolean;
     liveSessionMemoryRolloutPercent?: number;
+    // Coding model routing (coding-interview optimization). Which model handles
+    // coding/DSA/system-design/debugging answers:
+    //   undefined | 'auto'    → DeepSeek V4 Pro when a DeepSeek key exists (top
+    //                           LiveCodeBench for LeetCode-style problems)
+    //   'off'                 → never override (legacy per-provider routing)
+    //   { provider, model }   → explicit pick
+    // Resolved per-stream by electron/llm/codingModelRouting.ts.
+    codingModelOverride?: { provider: string; model: string } | 'off' | 'auto';
+    // Extract-then-solve (F2): when a coding answer targets a TEXT-ONLY coding
+    // model and a screenshot is attached, a vision model transcribes the
+    // problem first (budget-raced) and the text-only model solves it. Default
+    // ON (`!== false`). When false, screenshot-bearing coding requests keep the
+    // legacy multimodal path (the coding-model override is dropped for them).
+    codingExtractThenSolve?: boolean;
+    // Smart Mode (F3): coding-interview bias toggle. When true the planner
+    // re-routes ambiguous floor-type questions with technical cues to coding
+    // answer types, and the technical_interview dynamic-action trigger pack is
+    // active regardless of the ambient mode. Default off (undefined/false).
+    smartModeEnabled?: boolean;
 }
 
 export const VALID_SCREEN_UNDERSTANDING_MODES = ['vision_first', 'vision_only', 'private_vision'] as const;

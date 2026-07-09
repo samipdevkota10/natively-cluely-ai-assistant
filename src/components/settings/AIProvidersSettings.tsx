@@ -192,6 +192,9 @@ export const AIProvidersSettings: React.FC = () => {
     const [screenUnderstandingMode, setScreenUnderstandingMode] = useState<'vision_first' | 'vision_only' | 'private_vision'>('vision_first');
     const [technicalInterviewVisionFirst, setTechnicalInterviewVisionFirst] = useState<boolean>(true);
 
+    // --- Coding answers model routing (LeetCode-style answers) ---
+    const [codingModelOverride, setCodingModelOverride] = useState<'auto' | 'off' | { provider: string; model: string }>('auto');
+
     // --- Cloud Provider Data Scopes (fail-closed cloud share controls) ---
     const [providerDataScopes, setProviderDataScopes] = useState<{ transcript?: boolean; screenshots?: boolean; reference_files?: boolean; profile_history?: boolean; embeddings?: boolean; post_call_summary?: boolean }>({});
 
@@ -315,6 +318,14 @@ export const AIProvidersSettings: React.FC = () => {
         const api: any = window.electronAPI;
         if (!api?.onScreenUnderstandingModeChanged) return;
         const unsubscribe = api.onScreenUnderstandingModeChanged(setScreenUnderstandingMode);
+        return () => unsubscribe?.();
+    }, []);
+
+    // Load + subscribe to coding model override (LeetCode-style answer routing)
+    useEffect(() => {
+        const api: any = window.electronAPI;
+        api?.getCodingModelOverride?.().then((v: any) => { if (v) setCodingModelOverride(v); }).catch(() => { });
+        const unsubscribe = api?.onCodingModelOverrideChanged?.((v: any) => { if (v) setCodingModelOverride(v); });
         return () => unsubscribe?.();
     }, []);
 
@@ -1396,6 +1407,78 @@ export const AIProvidersSettings: React.FC = () => {
                             <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${technicalInterviewVisionFirst ? 'translate-x-4' : 'translate-x-0'}`} />
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Coding Answers Model — per-answer-type routing for LeetCode-style questions */}
+            <div className="space-y-5">
+                <div>
+                    <h3 className="text-sm font-bold text-text-primary mb-1">Coding answers model</h3>
+                    <p className="text-xs text-text-secondary mb-2">Which model answers coding, DSA, debugging and system-design questions. Other answer types keep your default model.</p>
+                </div>
+                <div className="bg-bg-item-surface rounded-xl p-4 border border-border-subtle flex flex-col gap-2">
+                    {([
+                        {
+                            key: 'auto',
+                            value: 'auto' as const,
+                            label: 'Auto (recommended)',
+                            description: 'DeepSeek V4 Pro when a DeepSeek key is configured — top LiveCodeBench score for LeetCode-style problems. Falls back to your default model otherwise.',
+                        },
+                        {
+                            key: 'deepseek',
+                            value: { provider: 'deepseek', model: 'deepseek-v4-pro' },
+                            label: 'DeepSeek V4 Pro',
+                            description: 'Always use DeepSeek V4 Pro for coding answers. Requires a DeepSeek API key.',
+                            requiresKey: 'deepseek' as const,
+                        },
+                        {
+                            key: 'claude',
+                            value: { provider: 'claude', model: 'claude-sonnet-4-6' },
+                            label: 'Claude Sonnet',
+                            description: 'Use Claude for coding answers. Requires a Claude API key.',
+                            requiresKey: 'claude' as const,
+                        },
+                        {
+                            key: 'openai',
+                            value: { provider: 'openai', model: 'gpt-5.4' },
+                            label: 'GPT-5.4',
+                            description: 'Use OpenAI for coding answers. Requires an OpenAI API key.',
+                            requiresKey: 'openai' as const,
+                        },
+                        {
+                            key: 'off',
+                            value: 'off' as const,
+                            label: 'Off',
+                            description: 'Never reroute coding answers — always use your default model.',
+                        },
+                    ]).map(({ key, value, label, description, requiresKey }) => {
+                        const selected = typeof codingModelOverride === 'string'
+                            ? codingModelOverride === value
+                            : typeof value !== 'string' && codingModelOverride.provider === value.provider;
+                        const keyMissing = requiresKey ? !hasStoredKey[requiresKey] : false;
+                        return (
+                            <div
+                                key={key}
+                                onClick={() => {
+                                    if (keyMissing) return;
+                                    setCodingModelOverride(value);
+                                    (window.electronAPI as any)?.setCodingModelOverride?.(value);
+                                }}
+                                className={`px-3 py-2 rounded-lg border transition-colors ${keyMissing ? 'opacity-40 cursor-not-allowed border-border-subtle bg-bg-elevated/30' : selected ? 'cursor-pointer border-emerald-500/50 bg-emerald-500/10' : 'cursor-pointer border-border-subtle hover:border-border-muted bg-bg-elevated/50'}`}
+                                role="radio"
+                                aria-checked={selected}
+                                aria-disabled={keyMissing}
+                            >
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="flex flex-col">
+                                        <span className={`text-xs font-semibold ${selected ? 'text-emerald-300' : 'text-text-primary'}`}>{label}{keyMissing ? ' — no API key' : ''}</span>
+                                        <span className="text-[11px] text-text-secondary leading-snug mt-0.5">{description}</span>
+                                    </div>
+                                    <div className={`w-4 h-4 rounded-full border-2 shrink-0 ${selected ? 'border-emerald-400 bg-emerald-400' : 'border-border-muted'}`} />
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 

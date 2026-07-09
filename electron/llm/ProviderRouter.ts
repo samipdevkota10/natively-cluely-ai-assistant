@@ -209,6 +209,9 @@ export type ProviderHealthStatus = 'healthy' | 'degraded' | 'down';
 export interface RoutingPolicy {
     mode?: ModeTemplateType;
     actionType?: ActionType;
+    // Advisory answer-type hint from AnswerPlanner (e.g. 'coding_question_answer').
+    // Coding/DSA/system-design/debugging types prefer the strongest coding provider.
+    answerType?: string;
     needsVision?: boolean;
     preferLowLatency?: boolean;
     privacySetting?: 'cloud' | 'local-only';
@@ -227,6 +230,17 @@ const VISION_PROVIDERS = ['gemini', 'claude', 'openai', 'groq'];
 const LOW_LATENCY_PROVIDERS = ['groq', 'gemini'];
 // Quality providers (for summary/recap tasks)
 const QUALITY_PROVIDERS = ['claude', 'openai', 'gemini_pro'];
+// Coding providers (LeetCode-style answers) — DeepSeek V4 Pro leads LiveCodeBench.
+const CODING_PROVIDERS = ['deepseek', 'claude', 'openai', 'gemini_pro'];
+// Answer types that should prefer the coding provider chain (mirrors
+// CODING_ROUTED_ANSWER_TYPES in codingModelRouting.ts, kept as strings so this
+// advisory router has no hard dependency on AnswerPlanner types).
+const CODING_ANSWER_TYPES = new Set([
+    'coding_question_answer',
+    'dsa_question_answer',
+    'debugging_question_answer',
+    'system_design_answer',
+]);
 // Local providers (for privacy mode)
 const LOCAL_PROVIDERS = ['ollama', 'custom'];
 
@@ -341,6 +355,19 @@ export class ProviderRouter {
         if (policy.needsVision) {
             const visionProvider = this.selectFromCapabilities(availableProviders, VISION_PROVIDERS, 'vision', health);
             if (visionProvider) return visionProvider;
+        }
+
+        // Rule 3.5: Coding answer types -> strongest coding provider chain
+        // (before low-latency: correctness beats speed for LeetCode-style answers)
+        if (policy.answerType && CODING_ANSWER_TYPES.has(policy.answerType)) {
+            const codingProvider = this.selectFromCapabilities(availableProviders, CODING_PROVIDERS, 'coding', health);
+            if (codingProvider) {
+                if (codingProvider.provider === 'deepseek') {
+                    // Prefer the strongest DeepSeek coding model over the flash default.
+                    codingProvider.model = 'deepseek-v4-pro';
+                }
+                return codingProvider;
+            }
         }
 
         // Rule 4: Low-latency request -> prefer fast providers

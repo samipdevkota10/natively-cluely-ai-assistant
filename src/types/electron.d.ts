@@ -69,6 +69,7 @@ export interface ElectronAPI {
   moveWindowRight: () => Promise<void>
   moveWindowUp: () => Promise<void>
   moveWindowDown: () => Promise<void>
+  moveWindowBy: (dx: number, dy: number) => Promise<void>
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
@@ -215,14 +216,25 @@ export interface ElectronAPI {
   generateFollowUp: (intent: string, userRequest?: string) => Promise<{ refined: string | null; intent: string }>
   generateFollowUpQuestions: () => Promise<{ questions: string | null }>
   generateRecap: () => Promise<{ summary: string | null }>
+  generateFactCheck: () => Promise<{ result: string | null }>
   submitManualQuestion: (question: string) => Promise<{ answer: string | null; question: string }>
   getIntelligenceContext: () => Promise<{ context: string; lastAssistantMessage: string | null; activeMode: string }>
   resetIntelligence: () => Promise<{ success: boolean; error?: string }>
 
   // Dynamic Action Button Mode
-  getActionButtonMode: () => Promise<'recap' | 'brainstorm'>
-  setActionButtonMode: (mode: 'recap' | 'brainstorm') => Promise<{ success: boolean }>
-  onActionButtonModeChanged: (callback: (mode: 'recap' | 'brainstorm') => void) => () => void
+  getActionButtonMode: () => Promise<'recap' | 'brainstorm' | 'fact_check'>
+  setActionButtonMode: (mode: 'recap' | 'brainstorm' | 'fact_check') => Promise<{ success: boolean }>
+  onActionButtonModeChanged: (callback: (mode: 'recap' | 'brainstorm' | 'fact_check') => void) => () => void
+
+  // Smart Mode (F3): coding-interview bias toggle
+  getSmartMode: () => Promise<boolean>
+  setSmartMode: (enabled: boolean) => Promise<{ success: boolean }>
+  onSmartModeChanged: (callback: (enabled: boolean) => void) => () => void
+
+  // Coding model override (coding-interview optimization)
+  getCodingModelOverride: () => Promise<{ provider: string; model: string } | 'off' | 'auto'>
+  setCodingModelOverride: (value: { provider: string; model: string } | 'off' | 'auto') => Promise<{ success: boolean }>
+  onCodingModelOverrideChanged: (callback: (value: { provider: string; model: string } | 'off' | 'auto') => void) => () => void
   onModeChanged: (callback: (data: { id: string | null; name: string | null }) => void) => () => void
 
   // Modes
@@ -277,13 +289,14 @@ export interface ElectronAPI {
   // Sprint 7: dedicated negotiation-coaching channel.
   onIntelligenceNegotiationCoaching: (callback: (data: { payload: any }) => void) => () => void
   // Sprint 9: time-batched IPC token channel.
-  onIntelligenceTokenBatch: (callback: (data: { kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'clarify' | 'follow_up_questions'; items: any[] }) => void) => () => void
+  onIntelligenceTokenBatch: (callback: (data: { kind: 'suggested_answer' | 'refined_answer' | 'recap' | 'fact_check' | 'clarify' | 'follow_up_questions'; items: any[] }) => void) => () => void
   onIntelligenceRefinedAnswerToken: (callback: (data: { token: string; intent: string }) => void) => () => void
   onIntelligenceRefinedAnswer: (callback: (data: { answer: string; intent: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsUpdate: (callback: (data: { questions: string }) => void) => () => void
   onIntelligenceFollowUpQuestionsToken: (callback: (data: { token: string }) => void) => () => void
   onIntelligenceRecap: (callback: (data: { summary: string }) => void) => () => void
   onIntelligenceRecapToken: (callback: (data: { token: string }) => void) => () => void
+  onIntelligenceFactCheck: (callback: (data: { result: string }) => void) => () => void
   onIntelligenceClarify: (callback: (data: { clarification: string }) => void) => () => void
   onIntelligenceClarifyToken: (callback: (data: { token: string }) => void) => () => void
   onIntelligenceManualStarted: (callback: () => void) => () => void
