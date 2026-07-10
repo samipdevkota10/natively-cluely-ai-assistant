@@ -41,7 +41,11 @@ export const CODING_CONTRACT = `CODING / DSA RESPONSE CONTRACT — output these 
 - One line: name the core DSA concept/data structure/algorithm (e.g. two pointers, sliding window, hash map, stack, queue, binary search, DP, BFS/DFS, heap, trie, union-find, recursion, backtracking).
 
 ## Code
-- Clean, correct, interview-ready code in ONE fenced block with a language tag (\`\`\`python). Meaningful names, minimal comments. Do NOT start the answer with code — the \`## Approach\` heading comes first.
+- Clean, correct, interview-ready code in ONE fenced block with a language tag (\`\`\`python). Do NOT start the answer with code — the \`## Approach\` heading comes first.
+- The solution MUST be wrapped in a named function (or a class method, e.g. LeetCode-style \`class Solution\`) with a clear signature and an explicit return value — NEVER loose top-level script code. If the problem statement provides a function/method signature, use it verbatim.
+- Write idiomatic code for the language (standard library data structures, the language's natural iteration/typing style). Meaningful variable names; ONE brief comment above each key algorithm step — never on obvious lines.
+- Handle the realistic edge cases IN the code (empty input, single element, duplicates, boundaries) — do not just mention them in prose.
+- No placeholders, no pseudo-code, no \`...\`, no "left as an exercise" — the code must run exactly as written. Before finalizing, trace it against the problem's example(s) and confirm it returns the expected output; fix the code, not the example.
 
 ## Dry Run
 - ONE small sample input, AT MOST 3 lines, showing how the code reaches the output. No second example.
@@ -59,7 +63,7 @@ Every heading is mandatory and must appear verbatim (with the \`## \` prefix). E
  * A compact one-line variant of the contract for tiny-model prompts where token
  * budget is tight but the SAME heading contract must hold.
  */
-export const CODING_CONTRACT_TINY = `Coding/DSA answers MUST use these EXACT markdown headings, in order, nothing before the first: "## Approach" (≤2 bullets, optimal only), "## Technique / Data Structure / Algorithm Used" (one line), "## Code" (one fenced block with a language tag), "## Dry Run" (one input, ≤3 lines), "## Complexity" (Time + Space, each "O(...) because ..."), "## Interviewer Follow-up Points" (≤3 bullets). Be terse: no preamble, never restate the question. Never start with code. A missing/renamed heading is a failure.`;
+export const CODING_CONTRACT_TINY = `Coding/DSA answers MUST use these EXACT markdown headings, in order, nothing before the first: "## Approach" (≤2 bullets, optimal only), "## Technique / Data Structure / Algorithm Used" (one line), "## Code" (one fenced block with a language tag; the solution wrapped in a named function/method with an explicit return — never loose top-level script; idiomatic, edge cases handled in code, runs exactly as written — no placeholders), "## Dry Run" (one input, ≤3 lines), "## Complexity" (Time + Space, each "O(...) because ..."), "## Interviewer Follow-up Points" (≤3 bullets). Be terse: no preamble, never restate the question. Never start with code. A missing/renamed heading is a failure.`;
 
 /**
  * Optional verification-spec instruction. Appended to the coding prompt ONLY

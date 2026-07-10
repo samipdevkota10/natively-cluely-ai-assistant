@@ -697,6 +697,23 @@ export function initializeIpcHandlers(appState: AppState): void {
           }
         }
 
+        // Screenshot-with-history (user request 2026-07-08): an image-bearing request
+        // must carry the recent conversation, not analyze the screenshot standalone.
+        // Built from the DURABLE transcript (survives the 120s eviction, so it still
+        // works when the last exchange was minutes ago) and captured BEFORE
+        // addTranscript below for the same echo reason as the snapshot above.
+        let screenshotConversationBlock: string | null = null;
+        if (imagePaths && imagePaths.length > 0) {
+          try {
+            const { buildScreenshotConversationContext } = require('./llm/screenshotChatContext') as typeof import('./llm/screenshotChatContext');
+            screenshotConversationBlock = buildScreenshotConversationContext(
+              intelligenceManager.getDurableContext(7200),
+            );
+          } catch (ctxErr) {
+            console.warn('[IPC] Failed to build screenshot conversation context:', ctxErr);
+          }
+        }
+
         // Now add USER message to IntelligenceManager (after context snapshot)
         intelligenceManager.addTranscript(
           {
@@ -759,6 +776,47 @@ export function initializeIpcHandlers(appState: AppState): void {
           smartMode: manualSmartMode,
         });
         const isCodingChat = isCodingAnswerType(answerPlan.answerType);
+
+        // Coding model routing (F1) for the MANUAL path — previously only the
+        // live-transcript path resolved this, so a screenshotted/typed coding
+        // question ran on the general default model instead of the strongest
+        // configured coding model. Resolution failure or a text-only pick with
+        // images attached → null override (legacy dispatch, unchanged behavior).
+        // Never mutates LLMHelper.currentModelId (per-stream only).
+        let manualCodingOverride: import('./llm/codingModelRouting').CodingModelOverride | null = null;
+        try {
+          const { resolveCodingModelOverride } = require('./llm/codingModelRouting') as typeof import('./llm/codingModelRouting');
+          let codingOverrideSetting: import('./llm/codingModelRouting').CodingModelOverrideSetting;
+          try {
+            const { SettingsManager } = require('./services/SettingsManager') as typeof import('./services/SettingsManager');
+            codingOverrideSetting = SettingsManager.getInstance().get('codingModelOverride');
+          } catch { /* settings unavailable → auto */ }
+          manualCodingOverride = resolveCodingModelOverride({
+            answerType: answerPlan.answerType,
+            availability: {
+              hasDeepseek: llmHelper.hasDeepseek?.() ?? false,
+              hasClaude: llmHelper.hasClaude?.() ?? false,
+              hasOpenai: llmHelper.hasOpenai?.() ?? false,
+              hasGemini: llmHelper.hasGemini?.() ?? false,
+            },
+            setting: codingOverrideSetting,
+          });
+          // Text-only provider + screenshot → drop the override, keep the images
+          // (the manual path has no extract-then-solve stage; a vision-capable
+          // model answering beats a stronger model that can't see the problem).
+          if (manualCodingOverride?.requiresTextOnlyInput && imagePaths && imagePaths.length > 0) {
+            manualCodingOverride = null;
+          }
+          if (manualCodingOverride) {
+            chatTrace.mark('coding_model_override', {
+              provider: manualCodingOverride.provider,
+              model: manualCodingOverride.model,
+            });
+          }
+        } catch (overrideErr: any) {
+          console.warn('[IPC] coding model override resolution failed (manual chat):', overrideErr?.message);
+        }
+
         chatTrace.mark('answer_type_selected', { answerType: answerPlan.answerType, isCoding: isCodingChat });
         piTelemetry.emit('pi_answer_plan_created', { answerType: answerPlan.answerType, surface: 'manual', isCoding: isCodingChat, profilePolicy: answerPlan.profileContextPolicy, answerStyle: answerPlan.answerStyle });
         iTrace.setRouting({
@@ -963,6 +1021,22 @@ export function initializeIpcHandlers(appState: AppState): void {
           console.log('[IPC] Answer-contract enforced; rolling context excluded', {
             answerType: answerPlan.answerType,
           });
+          // Screenshot-with-history: the bounded conversation block rides AFTER the
+          // contract (contract stays first and authoritative) so a screenshotted
+          // follow-up ("now do it in O(n)") resolves against the prior turns.
+          if (screenshotConversationBlock) {
+            context = `${context}\n\n${screenshotConversationBlock}`;
+            console.log(
+              `[IPC] Appended screenshot conversation context (${screenshotConversationBlock.length} chars)`,
+            );
+          }
+        } else if (!context && screenshotConversationBlock) {
+          // Image-bearing non-coding request: prefer the durable conversation block —
+          // the 100s snapshot is usually empty by the time a screenshot is lined up.
+          context = screenshotConversationBlock;
+          console.log(
+            `[IPC] Injected screenshot conversation context (${context.length} chars)`,
+          );
         } else if (!context && autoContextSnapshot) {
           context = autoContextSnapshot;
           console.log(
@@ -1038,7 +1112,15 @@ export function initializeIpcHandlers(appState: AppState): void {
             // path so the knowledge intercept + active-mode injection HONOR the
             // answer type's forbidden layers (no profile for coding/technical/
             // sales/lecture) and scope custom context by the real answer type.
-            { answerType: answerPlan.answerType, forbiddenContextLayers: answerPlan.forbiddenContextLayers },
+            // F1: modelOverride routes this ONE stream to the strongest configured
+            // coding model (null → legacy dispatch on currentModelId).
+            {
+              answerType: answerPlan.answerType,
+              forbiddenContextLayers: answerPlan.forbiddenContextLayers,
+              ...(manualCodingOverride
+                ? { modelOverride: { provider: manualCodingOverride.provider, model: manualCodingOverride.model } }
+                : {}),
+            },
           );
 
           // Coding chat STREAMS LIVE through a gate that holds tokens only until

@@ -113,6 +113,11 @@ export class IntelligenceManager extends EventEmitter {
         return this.session.getContext(lastSeconds);
     }
 
+    /** Durable turns from the persisted transcript (survives the 120s eviction). */
+    getDurableContext(lastSeconds: number = 7200) {
+        return this.session.getDurableContext(lastSeconds);
+    }
+
     getLastAssistantMessage(): string | null {
         return this.session.getLastAssistantMessage();
     }

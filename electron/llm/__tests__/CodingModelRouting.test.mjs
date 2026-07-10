@@ -12,12 +12,18 @@
 
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   resolveCodingModelOverride,
   CODING_ROUTED_ANSWER_TYPES,
   DEFAULT_CODING_PROVIDER,
   DEFAULT_CODING_MODEL,
 } from '../../../dist-electron/electron/llm/codingModelRouting.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(__dirname, '../../..');
 
 const NONE = { hasDeepseek: false };
 const DEEPSEEK_ONLY = { hasDeepseek: true };
@@ -155,5 +161,30 @@ describe('resolveCodingModelOverride — explicit setting wins', () => {
       }),
       null
     );
+  });
+});
+
+describe('source pins — manual chat path wiring (ipcHandlers gemini-chat-stream)', () => {
+  const src = readFileSync(path.join(repoRoot, 'electron/ipcHandlers.ts'), 'utf8');
+
+  test('manual path resolves the coding override from real key availability + setting', () => {
+    assert.match(src, /manualCodingOverride = resolveCodingModelOverride\(\{/);
+    assert.match(src, /hasDeepseek: llmHelper\.hasDeepseek\?\.\(\) \?\? false/);
+    assert.match(src, /get\('codingModelOverride'\)/);
+  });
+
+  test('text-only provider + screenshot drops the override (images win)', () => {
+    assert.match(
+      src,
+      /manualCodingOverride\?\.requiresTextOnlyInput && imagePaths && imagePaths\.length > 0[\s\S]{0,120}manualCodingOverride = null/
+    );
+  });
+
+  test('override is threaded into streamChat routeOptions (never currentModelId)', () => {
+    assert.match(
+      src,
+      /modelOverride: \{ provider: manualCodingOverride\.provider, model: manualCodingOverride\.model \}/
+    );
+    assert.ok(!src.includes('currentModelId = manualCodingOverride'), 'must never mutate currentModelId');
   });
 });
